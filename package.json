@@ -1,0 +1,28 @@
+{
+  "name": "convertitore",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w @convertitore/web",
+    "dev:worker": "npm run dev -w @convertitore/worker",
+    "build": "npm run build -w @convertitore/web && npm run build -w @convertitore/worker",
+    "start": "npm run start -w @convertitore/web",
+    "start:worker": "npm run start -w @convertitore/worker",
+    "test": "npm run test -ws --if-present",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate:dev": "prisma migrate dev",
+    "prisma:migrate": "prisma migrate deploy",
+    "seed": "tsx scripts/seed-admin.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.5.0",
+    "argon2": "^0.41.1"
+  },
+  "devDependencies": {
+    "prisma": "^6.5.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}

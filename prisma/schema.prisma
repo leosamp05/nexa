@@ -1,0 +1,127 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+}
+
+enum JobSourceType {
+  url
+  upload
+}
+
+enum JobStatus {
+  queued
+  processing
+  done
+  failed
+  expired
+  canceled
+}
+
+enum OutputFormat {
+  mp3
+  aac
+  ogg
+  wav
+  mp4
+  webm
+  mkv
+  pdf
+  docx
+  txt
+}
+
+enum UsagePurpose {
+  personal
+  licensed
+}
+
+enum AudioQuality {
+  low
+  standard
+  high
+}
+
+enum VideoQuality {
+  p720
+  p1080
+}
+
+enum FileKind {
+  input
+  output
+}
+
+model User {
+  id           String      @id @default(cuid())
+  email        String      @unique
+  passwordHash String
+  role         UserRole    @default(ADMIN)
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  jobs         Job[]
+  auditEvents  AuditEvent[]
+}
+
+model Job {
+  id            String        @id @default(cuid())
+  userId        String
+  sourceType    JobSourceType
+  status        JobStatus      @default(queued)
+  sourceUrl     String?
+  inputFilename String?
+  outputFormat  OutputFormat
+  purpose       UsagePurpose
+  hasRights     Boolean
+  audioQuality  AudioQuality   @default(standard)
+  videoQuality  VideoQuality   @default(p720)
+  errorMessage  String?
+  queueJobId    String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  startedAt     DateTime?
+  completedAt   DateTime?
+  canceledAt    DateTime?
+  expiresAt     DateTime
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  files         FileArtifact[]
+  auditEvents   AuditEvent[]
+}
+
+model FileArtifact {
+  id        String   @id @default(cuid())
+  jobId      String
+  kind      FileKind
+  path      String
+  filename  String
+  mimeType  String
+  sizeBytes BigInt
+  sha256    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  job       Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId, kind])
+}
+
+model AuditEvent {
+  id        String   @id @default(cuid())
+  userId    String?
+  jobId     String?
+  eventType String
+  ip        String?
+  metadata  Json?
+  createdAt DateTime @default(now())
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  job       Job?     @relation(fields: [jobId], references: [id], onDelete: SetNull)
+
+  @@index([eventType, createdAt])
+  @@index([jobId])
+}

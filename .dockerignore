@@ -1,0 +1,8 @@
+node_modules
+.git
+.next
+dist
+coverage
+.env
+storage/*
+!storage/.gitkeep

@@ -1,0 +1,69 @@
+- generic [ref=e1]:
+  - main [ref=e2]:
+    - generic [ref=e3]:
+      - generic [ref=e4]:
+        - generic [ref=e5]:
+          - heading "Nexa" [level=1] [ref=e6]
+          - paragraph [ref=e7]: Private hub for URL and file conversions.
+        - paragraph [ref=e9]: "Device IP: 172.217.23.174 · Active jobs: 0"
+      - tablist "Conversion source" [ref=e10]:
+        - tab "From URL" [ref=e11] [cursor=pointer]
+        - tab "From file" [active] [selected] [ref=e12] [cursor=pointer]
+    - generic [ref=e13]:
+      - generic [ref=e14]:
+        - heading "File conversion" [level=2] [ref=e93]
+        - tablist "Media type" [ref=e16]:
+          - tab "Audio" [selected] [ref=e17] [cursor=pointer]
+          - tab "Video" [ref=e18] [cursor=pointer]
+          - tab "Other files" [ref=e94] [cursor=pointer]
+      - generic [ref=e96]:
+        - generic [ref=e97]:
+          - generic [ref=e98]: Input file
+          - button "Drag and drop a file here or click to select No file selected" [ref=e99] [cursor=pointer]:
+            - generic [ref=e100]: Drag and drop a file here or click to select
+            - generic [ref=e101]: No file selected
+        - generic [ref=e102]:
+          - generic [ref=e103]:
+            - generic [ref=e104]: Output format
+            - combobox [ref=e105]:
+              - option "mp3" [selected]
+              - option "aac"
+              - option "ogg"
+              - option "wav"
+          - generic [ref=e106]:
+            - generic [ref=e107]: Audio quality
+            - combobox [ref=e108]:
+              - option "low"
+              - option "standard" [selected]
+              - option "high"
+        - button "Convert" [ref=e109] [cursor=pointer]
+    - generic [ref=e62]:
+      - heading "Job Queue" [level=2] [ref=e64]
+      - table [ref=e66]:
+        - rowgroup [ref=e67]:
+          - row "ID Source Output Status Created Error Actions" [ref=e68]:
+            - columnheader "ID" [ref=e69]
+            - columnheader "Source" [ref=e70]
+            - columnheader "Output" [ref=e71]
+            - columnheader "Status" [ref=e72]
+            - columnheader "Created" [ref=e73]
+            - columnheader "Error" [ref=e74]
+            - columnheader "Actions" [ref=e75]
+        - rowgroup [ref=e76]:
+          - row "cmm40dva70... url https://on.soundcloud.com/DqSXiKpnvV2tZ0PRuj mp3 done 26/02/2026, 23:02:13 - Download Delete" [ref=e77]:
+            - cell "cmm40dva70..." [ref=e78]
+            - cell "url https://on.soundcloud.com/DqSXiKpnvV2tZ0PRuj" [ref=e79]:
+              - generic [ref=e80]: url
+              - generic [ref=e81]: https://on.soundcloud.com/DqSXiKpnvV2tZ0PRuj
+            - cell "mp3" [ref=e82]
+            - cell "done" [ref=e83]
+            - cell "26/02/2026, 23:02:13" [ref=e84]
+            - cell "-" [ref=e85]
+            - cell "Download Delete" [ref=e86]:
+              - generic [ref=e87]:
+                - link "Download" [ref=e88] [cursor=pointer]:
+                  - /url: /api/jobs/cmm40dva70008md4r7oyc18um/download
+                  - button "Download" [ref=e89]
+                - button "Delete" [ref=e90] [cursor=pointer]
+    - generic [ref=e91]: Files are automatically deleted after 24 hours.
+  - alert [ref=e92]

@@ -1,0 +1,86 @@
+- generic [active] [ref=e1]:
+  - main [ref=e2]:
+    - generic [ref=e3]:
+      - generic [ref=e4]:
+        - generic [ref=e5]:
+          - heading "Nexa" [level=1] [ref=e6]
+          - paragraph [ref=e7]: Private hub for URL and file conversions.
+        - paragraph [ref=e9]: "Device IP: 172.217.23.174 · Active jobs: 0"
+      - tablist "Conversion source" [ref=e10]:
+        - tab "From URL" [selected] [ref=e11] [cursor=pointer]
+        - tab "From file" [ref=e12] [cursor=pointer]
+    - generic [ref=e13]:
+      - generic [ref=e14]:
+        - heading "URL conversion" [level=2] [ref=e15]
+        - tablist "Media type" [ref=e16]:
+          - tab "Audio" [selected] [ref=e17] [cursor=pointer]
+          - tab "Video" [ref=e18] [cursor=pointer]
+      - generic [ref=e20]:
+        - generic [ref=e21]:
+          - generic [ref=e22]: Source URL
+          - textbox "Source URL" [ref=e23]:
+            - /placeholder: https://...
+          - generic "Supported services" [ref=e24]:
+            - generic [ref=e25]: Supported services
+            - list [ref=e26]:
+              - listitem [ref=e27]:
+                - generic [ref=e28]:
+                  - img [ref=e29]
+                  - generic [ref=e32]: YouTube
+              - listitem [ref=e33]:
+                - generic [ref=e34]:
+                  - img [ref=e35]
+                  - generic [ref=e41]: SoundCloud
+              - listitem [ref=e42]:
+                - generic [ref=e43]:
+                  - img [ref=e44]
+                  - generic [ref=e47]: Vimeo
+              - listitem [ref=e48]:
+                - generic [ref=e49]:
+                  - img [ref=e50]
+                  - generic [ref=e53]: Bandcamp
+        - generic [ref=e54]:
+          - generic [ref=e55]:
+            - generic [ref=e56]: Output format
+            - combobox [ref=e57]:
+              - option "mp3" [selected]
+              - option "aac"
+              - option "ogg"
+              - option "wav"
+          - generic [ref=e58]:
+            - generic [ref=e59]: Audio quality
+            - combobox [ref=e60]:
+              - option "low"
+              - option "standard" [selected]
+              - option "high"
+        - button "Convert" [ref=e61] [cursor=pointer]
+    - generic [ref=e62]:
+      - heading "Job Queue" [level=2] [ref=e64]
+      - table [ref=e66]:
+        - rowgroup [ref=e67]:
+          - row "ID Source Output Status Created Error Actions" [ref=e68]:
+            - columnheader "ID" [ref=e69]
+            - columnheader "Source" [ref=e70]
+            - columnheader "Output" [ref=e71]
+            - columnheader "Status" [ref=e72]
+            - columnheader "Created" [ref=e73]
+            - columnheader "Error" [ref=e74]
+            - columnheader "Actions" [ref=e75]
+        - rowgroup [ref=e76]:
+          - row "cmm40dva70... url https://on.soundcloud.com/DqSXiKpnvV2tZ0PRuj mp3 done 26/02/2026, 23:02:13 - Download Delete" [ref=e77]:
+            - cell "cmm40dva70..." [ref=e78]
+            - cell "url https://on.soundcloud.com/DqSXiKpnvV2tZ0PRuj" [ref=e79]:
+              - generic [ref=e80]: url
+              - generic [ref=e81]: https://on.soundcloud.com/DqSXiKpnvV2tZ0PRuj
+            - cell "mp3" [ref=e82]
+            - cell "done" [ref=e83]
+            - cell "26/02/2026, 23:02:13" [ref=e84]
+            - cell "-" [ref=e85]
+            - cell "Download Delete" [ref=e86]:
+              - generic [ref=e87]:
+                - link "Download" [ref=e88] [cursor=pointer]:
+                  - /url: /api/jobs/cmm40dva70008md4r7oyc18um/download
+                  - button "Download" [ref=e89]
+                - button "Delete" [ref=e90] [cursor=pointer]
+    - generic [ref=e91]: Files are automatically deleted after 24 hours.
+  - alert [ref=e92]

@@ -1,0 +1,44 @@
+:root {
+  /* Core Colors */
+  --color-bg-main: #0b1016;
+  --color-panel: rgba(14, 22, 31, 0.74);
+  --color-panel-strong: rgba(20, 31, 43, 0.92);
+  --color-text: #e7eef7;
+  --color-text-muted: #8ea0b4;
+  --color-accent: #62a9ff;
+  --color-accent-alt: #2f6cf3;
+  --color-danger: #ff7f8f;
+  --color-ok: #4fd4aa;
+
+  /* Surface Effects */
+  --bg-gradient:
+    radial-gradient(circle at 8% 12%, rgba(47, 108, 243, 0.24), transparent 28%),
+    radial-gradient(circle at 84% 7%, rgba(98, 169, 255, 0.22), transparent 24%),
+    radial-gradient(circle at 70% 82%, rgba(79, 212, 170, 0.11), transparent 30%),
+    linear-gradient(145deg, #0b1016 0%, #101925 45%, #0c131d 100%);
+
+  /* Border + Radius */
+  --border-soft: 1px solid rgba(133, 154, 177, 0.22);
+  --border-input: 1px solid rgba(133, 154, 177, 0.3);
+  --radius-panel: 16px;
+  --radius-input: 10px;
+  --radius-pill: 999px;
+
+  /* Spacing */
+  --space-xxs: 0.25rem;
+  --space-xs: 0.35rem;
+  --space-sm: 0.5rem;
+  --space-md: 0.75rem;
+  --space-lg: 1rem;
+  --space-xl: 2rem;
+
+  /* Typography */
+  --font-size-small: 0.82rem;
+  --font-size-label: 0.86rem;
+  --font-size-table: 0.9rem;
+
+  /* Motion */
+  --ease-standard: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur-fast: 150ms;
+  --dur-mid: 260ms;
+}
