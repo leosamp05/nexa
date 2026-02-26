@@ -48,7 +48,7 @@ Built with Next.js + BullMQ worker + Redis + PostgreSQL, designed to run on a VP
 ### 1. Clone
 
 ```bash
-git clone [<your-repo-url>](https://github.com/leosamp05/nexa.git)
+git clone https://github.com/leosamp05/nexa.git
 cd nexa
 ```
 
