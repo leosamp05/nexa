@@ -227,10 +227,29 @@ GitHub Actions workflow:
 - `.github/workflows/ci.yml`
 - CI creates a temporary `.env` from `.env.example` before Docker Compose validation
 - runs install, Prisma generate, unit tests, e2e smoke tests, build, compose validation, and Docker image builds.
+- `.github/workflows/release-packages.yml`
+- on tag push `v*`, it publishes Docker images to GHCR and creates a GitHub Release automatically
 
 ## Operations
 
 Operational runbook: `docs/runbook.md`
+
+## Release v1.0 flow
+
+```bash
+git add .
+git commit -m "release: v1.0"
+git tag -a v1.0 -m "Nexa v1.0"
+git push origin main
+git push origin v1.0
+```
+
+After the tag is pushed:
+
+- `Release and Packages` workflow creates the Release in GitHub
+- Docker images are published to:
+  - `ghcr.io/<owner>/nexa-web:v1.0` and `:latest`
+  - `ghcr.io/<owner>/nexa-worker:v1.0` and `:latest`
 
 ## Project structure
 
