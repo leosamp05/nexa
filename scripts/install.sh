@@ -4,13 +4,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${ROOT_DIR}/.env"
 
-if [[ -t 1 ]]; then
-  BLUE="\033[1;34m"
-  RESET="\033[0m"
-else
-  BLUE=""
-  RESET=""
-fi
+BLUE=$'\033[1;34m'
+RESET=$'\033[0m'
 
 print_banner() {
   printf "\n%s" "${BLUE}"
@@ -33,11 +28,11 @@ EOF
 
 print_title() {
   print_banner
-  printf "Nexa installer guidato\n"
-  printf "======================\n\n"
-  printf "Profili:\n"
-  printf "  - Development: setup locale rapido, log piu dettagliati.\n"
-  printf "  - Production: default piu sicuri e adatti a VPS/ambiente pubblico.\n"
+  printf "Installer\n"
+  printf "=========\n\n"
+  printf "Profiles:\n"
+  printf "  - Development: faster local setup with more verbose logs.\n"
+  printf "  - Production: safer defaults for public/VPS deployments.\n"
 }
 
 print_step() {
@@ -59,10 +54,10 @@ prompt_yes_no() {
   read -r -p "${label} [${default_value}]: " answer
   answer="${answer:-$default_value}"
   case "${answer,,}" in
-    y|yes|s|si) printf "yes" ;;
+    y|yes) printf "yes" ;;
     n|no) printf "no" ;;
     *)
-      printf "Scelta non valida. Usa yes/no.\n" >&2
+      printf "Invalid choice. Use yes/no.\n" >&2
       return 1
       ;;
   esac
@@ -158,13 +153,13 @@ configure_common_env_defaults() {
 }
 
 print_title
-printf "Scegli il profilo:\n"
+printf "Choose profile:\n"
 printf "  1) Development\n"
 printf "  2) Production\n"
 
 PROFILE_MODE=""
 while [[ -z "$PROFILE_MODE" ]]; do
-  profile_choice="$(prompt_with_default "Profilo" "1")"
+  profile_choice="$(prompt_with_default "Profile" "1")"
   case "$profile_choice" in
     1|dev|development)
       PROFILE_MODE="development"
@@ -173,18 +168,18 @@ while [[ -z "$PROFILE_MODE" ]]; do
       PROFILE_MODE="production"
       ;;
     *)
-      printf "Scelta non valida. Inserisci 1 o 2.\n"
+      printf "Invalid choice. Enter 1 or 2.\n"
       ;;
   esac
 done
 
-printf "Scegli la modalita di installazione:\n"
-printf "  1) Docker (consigliata)\n"
-printf "  2) Normale (Node.js locale)\n"
+printf "Choose installation mode:\n"
+printf "  1) Docker (recommended)\n"
+printf "  2) Native (local Node.js)\n"
 
 INSTALL_MODE=""
 while [[ -z "$INSTALL_MODE" ]]; do
-  choice="$(prompt_with_default "Modalita" "1")"
+  choice="$(prompt_with_default "Mode" "1")"
   case "$choice" in
     1|docker|Docker)
       INSTALL_MODE="docker"
@@ -193,20 +188,20 @@ while [[ -z "$INSTALL_MODE" ]]; do
       INSTALL_MODE="native"
       ;;
     *)
-      printf "Scelta non valida. Inserisci 1 o 2.\n"
+      printf "Invalid choice. Enter 1 or 2.\n"
       ;;
   esac
 done
 
-APP_HOST="$(prompt_with_default "IP/host applicazione" "localhost")"
+APP_HOST="$(prompt_with_default "App host/IP" "localhost")"
 
 APP_PORT=""
 while [[ -z "$APP_PORT" ]]; do
-  raw_port="$(prompt_with_default "Porta applicazione" "3001")"
+  raw_port="$(prompt_with_default "App port" "3001")"
   if [[ "$raw_port" =~ ^[0-9]+$ ]] && (( raw_port >= 1 && raw_port <= 65535 )); then
     APP_PORT="$raw_port"
   else
-    printf "Porta non valida. Inserisci un numero tra 1 e 65535.\n"
+    printf "Invalid port. Enter a number between 1 and 65535.\n"
   fi
 done
 
@@ -218,10 +213,10 @@ if [[ "$PROFILE_MODE" == "production" ]]; then
 fi
 
 while true; do
-  AUTH_REQUIRED_ANSWER="$(prompt_yes_no "Richiedere autenticazione login" "$AUTH_REQUIRED_DEFAULT")" && break
+  AUTH_REQUIRED_ANSWER="$(prompt_yes_no "Require login authentication" "$AUTH_REQUIRED_DEFAULT")" && break
 done
 
-print_step "Aggiorno file .env"
+print_step "Updating .env"
 configure_common_env_defaults
 set_env_var "APP_URL" "http://${APP_HOST}:${APP_PORT}"
 set_env_var "APP_DOMAIN" "$APP_HOST"
@@ -238,12 +233,12 @@ mkdir -p "${ROOT_DIR}/storage"
 if [[ "$INSTALL_MODE" == "docker" ]]; then
   USE_CADDY="no"
   while true; do
-    USE_CADDY="$(prompt_yes_no "Abilitare anche reverse proxy Caddy (80/443)" "no")" && break
+    USE_CADDY="$(prompt_yes_no "Enable Caddy reverse proxy as well (80/443)" "no")" && break
   done
 
   compose_cmd="$(detect_compose_cmd)"
   if [[ -z "$compose_cmd" ]]; then
-    printf "\nDocker Compose non trovato. Installa Docker Desktop o docker-compose e riprova.\n"
+    printf "\nDocker Compose not found. Install Docker Desktop or docker-compose and retry.\n"
     exit 1
   fi
 
@@ -264,8 +259,8 @@ if [[ "$INSTALL_MODE" == "docker" ]]; then
 
   if [[ "$AUTH_REQUIRED_ANSWER" == "yes" ]]; then
     set_env_var "AUTH_REQUIRED" "true"
-    admin_email="$(prompt_with_default "Email admin iniziale (seed opzionale)" "admin@example.com")"
-    read -r -s -p "Password admin iniziale (lascia vuoto per saltare): " admin_password
+    admin_email="$(prompt_with_default "Initial admin email (optional seed)" "admin@example.com")"
+    read -r -s -p "Initial admin password (leave empty to skip): " admin_password
     printf "\n"
     if [[ -n "$admin_password" ]]; then
       set_env_var "ADMIN_EMAIL" "$admin_email"
@@ -275,20 +270,20 @@ if [[ "$INSTALL_MODE" == "docker" ]]; then
     set_env_var "AUTH_REQUIRED" "false"
   fi
 
-  print_step "Avvio servizi Docker (${services[*]})"
+  print_step "Starting Docker services (${services[*]})"
   if [[ "$compose_cmd" == "docker compose" ]]; then
     run_cmd docker compose up -d --build "${services[@]}"
   else
     run_cmd docker-compose up -d --build "${services[@]}"
   fi
 
-  print_step "Installazione completata"
-  printf "Apri: http://%s:%s\n" "$APP_HOST" "$APP_PORT"
+  print_step "Installation completed"
+  printf "Open: http://%s:%s\n" "$APP_HOST" "$APP_PORT"
   if [[ "$USE_CADDY" == "yes" ]]; then
-    printf "Caddy attivo su: http://%s e https://%s\n" "$APP_HOST" "$APP_HOST"
+    printf "Caddy active on: http://%s and https://%s\n" "$APP_HOST" "$APP_HOST"
   fi
-  printf "Log web:   docker compose logs -f web\n"
-  printf "Log worker: docker compose logs -f worker\n"
+  printf "Web logs:    docker compose logs -f web\n"
+  printf "Worker logs: docker compose logs -f worker\n"
   exit 0
 fi
 
@@ -298,8 +293,8 @@ set_env_var "REDIS_URL" "redis://localhost:6379"
 set_env_var "DATA_DIR" "${ROOT_DIR}/storage"
 if [[ "$AUTH_REQUIRED_ANSWER" == "yes" ]]; then
   set_env_var "AUTH_REQUIRED" "true"
-  admin_email="$(prompt_with_default "Email admin iniziale (seed opzionale)" "admin@example.com")"
-  read -r -s -p "Password admin iniziale (lascia vuoto per saltare): " admin_password
+  admin_email="$(prompt_with_default "Initial admin email (optional seed)" "admin@example.com")"
+  read -r -s -p "Initial admin password (leave empty to skip): " admin_password
   printf "\n"
   if [[ -n "$admin_password" ]]; then
     set_env_var "ADMIN_EMAIL" "$admin_email"
@@ -310,26 +305,26 @@ else
 fi
 
 if ! command -v npm >/dev/null 2>&1; then
-  printf "\nNode.js/npm non trovato. Installa Node.js (LTS) e riprova.\n"
+  printf "\nNode.js/npm not found. Install Node.js (LTS) and retry.\n"
   exit 1
 fi
 
 if command -v nc >/dev/null 2>&1; then
   if ! nc -z localhost 5432 >/dev/null 2>&1; then
-    printf "\nAttenzione: PostgreSQL non risponde su localhost:5432.\n"
+    printf "\nWarning: PostgreSQL is not reachable on localhost:5432.\n"
   fi
   if ! nc -z localhost 6379 >/dev/null 2>&1; then
-    printf "Attenzione: Redis non risponde su localhost:6379.\n"
+    printf "Warning: Redis is not reachable on localhost:6379.\n"
   fi
 fi
 
-print_step "Installo dipendenze e preparo database"
+print_step "Installing dependencies and preparing database"
 run_cmd npm install
 run_cmd npm run prisma:generate
 run_cmd npm run prisma:migrate
 run_cmd npm run seed
 
-print_step "Installazione completata"
-printf "Avvia web:    npm run dev -w @convertitore/web -- --hostname %s --port %s\n" "$APP_HOST" "$APP_PORT"
-printf "Avvia worker: npm run dev -w @convertitore/worker\n"
-printf "Apri: http://%s:%s\n" "$APP_HOST" "$APP_PORT"
+print_step "Installation completed"
+printf "Start web:    npm run dev -w @convertitore/web -- --hostname %s --port %s\n" "$APP_HOST" "$APP_PORT"
+printf "Start worker: npm run dev -w @convertitore/worker\n"
+printf "Open: http://%s:%s\n" "$APP_HOST" "$APP_PORT"
