@@ -69,8 +69,43 @@ function isPrivateOrLocalIp(raw: string) {
   return true;
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isTransientDnsError(error: unknown) {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return code === "EAI_AGAIN" || code === "ETIMEOUT" || code === "ENETUNREACH";
+}
+
+async function lookupWithRetry(host: string, attempts = 3) {
+  let lastError: unknown = null;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await dns.lookup(host, { all: true, verbatim: true }) as dns.LookupAddress[];
+    } catch (error) {
+      lastError = error;
+      if (attempt >= attempts || !isTransientDnsError(error)) break;
+      await sleep(200 * attempt);
+    }
+  }
+
+  throw lastError;
+}
+
 async function ensureHostResolvesToPublicIps(host: string) {
-  const records = await dns.lookup(host, { all: true, verbatim: true });
+  let records: dns.LookupAddress[];
+  try {
+    records = await lookupWithRetry(host, 3);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "EAI_AGAIN" || code === "ETIMEOUT") {
+      throw new Error("Temporary DNS resolution error. Please retry.");
+    }
+    throw new Error("Source host cannot be resolved");
+  }
+
   if (records.length === 0) {
     throw new Error("Source host cannot be resolved");
   }
