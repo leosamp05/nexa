@@ -5,6 +5,8 @@ export function serializeJob(job: Job & { files?: FileArtifact[] }) {
     id: job.id,
     sourceType: job.sourceType,
     status: job.status,
+    attemptCount: job.attemptCount,
+    maxAttempts: job.maxAttempts,
     sourceUrl: job.sourceUrl,
     inputFilename: job.inputFilename,
     outputFormat: job.outputFormat,
@@ -18,6 +20,7 @@ export function serializeJob(job: Job & { files?: FileArtifact[] }) {
     startedAt: job.startedAt?.toISOString() ?? null,
     completedAt: job.completedAt?.toISOString() ?? null,
     canceledAt: job.canceledAt?.toISOString() ?? null,
+    lastErrorAt: job.lastErrorAt?.toISOString() ?? null,
     expiresAt: job.expiresAt.toISOString(),
     files: (job.files ?? []).map((file) => ({
       id: file.id,

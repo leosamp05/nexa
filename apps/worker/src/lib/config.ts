@@ -16,6 +16,8 @@ export const config = {
   dataDir: path.resolve(process.env.DATA_DIR ?? path.join(process.cwd(), "..", "..", "storage")),
   maxDurationSeconds: n(process.env.MAX_DURATION_SECONDS, 3600),
   jobTimeoutMs: n(process.env.JOB_TIMEOUT_MS, 900000),
+  queueAttempts: n(process.env.QUEUE_ATTEMPTS, 3),
+  queueRetryDelayMs: n(process.env.QUEUE_RETRY_DELAY_MS, 5000),
   workerConcurrency: n(process.env.WORKER_CONCURRENCY, 2),
   cleanupIntervalMs: 60 * 60 * 1000,
   allowedHosts: list(process.env.ALLOWED_SOURCE_HOSTS, [

@@ -1,4 +1,5 @@
 import { Worker } from "bullmq";
+import type { ConnectionOptions } from "bullmq";
 import { config } from "./lib/config";
 import { logger } from "./lib/logger";
 import { prisma } from "./lib/prisma";
@@ -10,17 +11,28 @@ async function main() {
   const worker = new Worker<{ jobId: string }>(
     QUEUE_NAME,
     async (job) => {
-      await processConversionJob(job.data.jobId);
+      const maxAttemptsRaw = Number(job.opts.attempts ?? config.queueAttempts);
+      const maxAttempts = Number.isFinite(maxAttemptsRaw) && maxAttemptsRaw > 0 ? maxAttemptsRaw : config.queueAttempts;
+      await processConversionJob(job.data.jobId, {
+        attempt: job.attemptsMade + 1,
+        maxAttempts,
+      });
     },
     {
-      connection: redis,
+      connection: redis as unknown as ConnectionOptions,
       concurrency: config.workerConcurrency,
     }
   );
 
   worker.on("ready", () => logger.info("Worker ready"));
-  worker.on("completed", (job) => logger.info({ queueJobId: job.id }, "Queue job completed"));
-  worker.on("failed", (job, error) => logger.error({ queueJobId: job?.id, error }, "Queue job failed"));
+  worker.on("completed", (job) => logger.info({ queueJobId: job.id, attemptsMade: job.attemptsMade + 1 }, "Queue job completed"));
+  worker.on("failed", (job, error) => {
+    const attempts = Number(job?.opts.attempts ?? config.queueAttempts);
+    const attemptsMade = (job?.attemptsMade ?? 0) + 1;
+    const willRetry = attemptsMade < attempts;
+    logger.error({ queueJobId: job?.id, attemptsMade, attempts, willRetry, error }, "Queue job failed");
+  });
+  worker.on("stalled", (jobId) => logger.warn({ queueJobId: jobId }, "Queue job stalled"));
 
   await runCleanupSweep();
   const timer = setInterval(() => {

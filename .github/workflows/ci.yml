@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Generate Prisma client
+        run: npm run prisma:generate
+
+      - name: Unit tests
+        run: npm run test
+
+      - name: E2E smoke tests
+        run: npm run test:e2e
+
+      - name: Build workspaces
+        run: npm run build
+
+      - name: Validate Docker Compose
+        run: docker compose config -q
+
+      - name: Build Docker images
+        run: |
+          docker build -f Dockerfile.web -t nexa-web:ci .
+          docker build -f Dockerfile.worker -t nexa-worker:ci .

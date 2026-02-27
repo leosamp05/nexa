@@ -5,12 +5,14 @@
     "apps/*"
   ],
   "scripts": {
+    "setup": "bash scripts/install.sh",
     "dev": "npm run dev -w @convertitore/web",
     "dev:worker": "npm run dev -w @convertitore/worker",
     "build": "npm run build -w @convertitore/web && npm run build -w @convertitore/worker",
     "start": "npm run start -w @convertitore/web",
     "start:worker": "npm run start -w @convertitore/worker",
-    "test": "npm run test -ws --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "test:e2e": "playwright test",
     "prisma:generate": "prisma generate",
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:migrate": "prisma migrate deploy",
@@ -21,6 +23,7 @@
     "argon2": "^0.41.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.53.1",
     "prisma": "^6.5.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3"

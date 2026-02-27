@@ -79,6 +79,22 @@ function isOutputCompatible(format: string, media: MediaMode) {
   return OTHER_FILE_OUTPUTS.includes(format as (typeof OTHER_FILE_OUTPUTS)[number]);
 }
 
+function statusLabel(job: SerializedJob) {
+  if (job.status === "queued" && job.attemptCount > 0 && job.attemptCount < job.maxAttempts) {
+    return `retry ${job.attemptCount}/${job.maxAttempts}`;
+  }
+
+  if (job.status === "processing") {
+    return `attempt ${job.attemptCount || 1}/${job.maxAttempts || 1}`;
+  }
+
+  if (job.status === "failed" && job.maxAttempts > 1) {
+    return `exhausted ${job.attemptCount}/${job.maxAttempts}`;
+  }
+
+  return job.status;
+}
+
 export function DashboardClient({ clientIp, authRequired, initialJobs, captchaEnabled, captchaSiteKey }: Props) {
   const [jobs, setJobs] = useState(initialJobs);
   const [message, setMessage] = useState<string | null>(null);
@@ -593,7 +609,7 @@ export function DashboardClient({ clientIp, authRequired, initialJobs, captchaEn
                       {job.sourceUrl ? <div className="small url-preview">{job.sourceUrl}</div> : null}
                     </td>
                     <td>{job.outputFormat}</td>
-                    <td><span className={`badge ${job.status}`}>{job.status}</span></td>
+                    <td><span className={`badge ${job.status}`}>{statusLabel(job)}</span></td>
                     <td>{new Date(job.createdAt).toLocaleString()}</td>
                     <td className="small">{job.errorMessage ?? "-"}</td>
                     <td>

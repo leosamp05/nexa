@@ -75,6 +75,8 @@ model Job {
   userId        String
   sourceType    JobSourceType
   status        JobStatus      @default(queued)
+  attemptCount  Int            @default(0)
+  maxAttempts   Int            @default(3)
   sourceUrl     String?
   inputFilename String?
   outputFormat  OutputFormat
@@ -89,10 +91,15 @@ model Job {
   startedAt     DateTime?
   completedAt   DateTime?
   canceledAt    DateTime?
+  lastErrorAt   DateTime?
   expiresAt     DateTime
   user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   files         FileArtifact[]
   auditEvents   AuditEvent[]
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+  @@index([expiresAt])
 }
 
 model FileArtifact {

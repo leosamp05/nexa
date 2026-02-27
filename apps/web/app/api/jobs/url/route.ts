@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { jsonError } from "@/lib/http";
 import { getCurrentUser } from "@/lib/auth";
+import { appConfig } from "@/lib/config";
 import { prisma } from "@/lib/prisma";
 import { createUrlJobSchema } from "@/lib/jobs";
 import { enqueueConversionJob } from "@/lib/queue";
@@ -21,7 +22,7 @@ export async function POST(request: NextRequest) {
   const payload = createUrlJobSchema.safeParse(await request.json().catch(() => null));
   if (!payload.success) return jsonError(400, "Invalid payload");
 
-  const source = validateSourceUrl(payload.data.url);
+  const source = await validateSourceUrl(payload.data.url);
   if (!source.valid) return jsonError(400, source.reason);
 
   const captchaOk = await verifyCaptcha(payload.data.captchaToken, ip);
@@ -34,6 +35,7 @@ export async function POST(request: NextRequest) {
       userId: user.id,
       sourceType: "url",
       sourceUrl: payload.data.url,
+      maxAttempts: appConfig.queueAttempts,
       outputFormat: payload.data.outputFormat,
       purpose: "personal",
       hasRights: false,

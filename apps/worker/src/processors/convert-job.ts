@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import dns from "node:dns/promises";
+import net from "node:net";
 import { JobStatus, OutputFormat } from "@prisma/client";
 import { convertDocument, isDocumentOutput } from "../converters/document";
 import { convertMedia, isMediaOutput } from "../converters/media";
@@ -25,6 +27,59 @@ function isSoundCloudHost(host: string) {
 
 function isSoundCloudShortHost(host: string) {
   return host === "on.soundcloud.com" || host.endsWith(".on.soundcloud.com");
+}
+
+function normalizeIp(raw: string) {
+  if (raw.startsWith("::ffff:")) return raw.slice(7);
+  return raw;
+}
+
+function isPrivateIpv4(ip: string) {
+  const parts = ip.split(".").map((x) => Number(x));
+  if (parts.length !== 4 || parts.some((value) => !Number.isInteger(value) || value < 0 || value > 255)) return false;
+  const [a, b] = parts;
+
+  if (a === 10 || a === 127 || a === 0) return true;
+  if (a === 169 && b === 254) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 100 && b >= 64 && b <= 127) return true;
+  if (a === 198 && (b === 18 || b === 19)) return true;
+  if (a >= 224) return true;
+  return false;
+}
+
+function isPrivateOrLocalIp(raw: string) {
+  const ip = normalizeIp(raw.toLowerCase());
+
+  if (net.isIPv4(ip)) return isPrivateIpv4(ip);
+  if (net.isIPv6(ip)) {
+    return (
+      ip === "::1" ||
+      ip === "::" ||
+      ip.startsWith("fc") ||
+      ip.startsWith("fd") ||
+      ip.startsWith("fe8") ||
+      ip.startsWith("fe9") ||
+      ip.startsWith("fea") ||
+      ip.startsWith("feb")
+    );
+  }
+
+  return true;
+}
+
+async function ensureHostResolvesToPublicIps(host: string) {
+  const records = await dns.lookup(host, { all: true, verbatim: true });
+  if (records.length === 0) {
+    throw new Error("Source host cannot be resolved");
+  }
+
+  for (const record of records) {
+    if (isPrivateOrLocalIp(record.address)) {
+      throw new Error("Source resolves to private/internal network");
+    }
+  }
 }
 
 async function resolveSoundCloudShortUrl(sourceUrl: string) {
@@ -79,15 +134,31 @@ async function resolveSoundCloudShortUrl(sourceUrl: string) {
   return sourceUrl;
 }
 
-function validateSourceHost(sourceUrl: string) {
+async function validateSourceHost(sourceUrl: string) {
   const parsed = new URL(sourceUrl);
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("Source URL must use http or https");
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error("Source URL credentials are not allowed");
+  }
+  if (parsed.port && parsed.port !== "80" && parsed.port !== "443") {
+    throw new Error("Source URL port is not allowed");
+  }
+
   const host = parsed.hostname.toLowerCase();
+  if (host === "localhost" || host.endsWith(".local") || host.endsWith(".internal")) {
+    throw new Error("Source host is not allowed");
+  }
 
   const blocked = config.blockedPatterns.some((pattern) => sourceUrl.toLowerCase().includes(pattern) || host.includes(pattern));
   if (blocked) throw new Error("Source blocked by policy");
 
   const allowed = config.allowedHosts.some((allowedHost) => host === allowedHost || host.endsWith(`.${allowedHost}`));
   if (!allowed) throw new Error("Source host is not allowed");
+
+  await ensureHostResolvesToPublicIps(host);
+  return host;
 }
 
 function sanitizeBaseName(value: string) {
@@ -166,9 +237,7 @@ async function processUrlJob(params: {
   videoQuality: "p720" | "p1080";
 }) {
   const resolvedSourceUrl = await resolveSoundCloudShortUrl(params.sourceUrl);
-  const parsedSource = new URL(resolvedSourceUrl);
-  const sourceHost = parsedSource.hostname.toLowerCase();
-  validateSourceHost(resolvedSourceUrl);
+  const sourceHost = await validateSourceHost(resolvedSourceUrl);
   const normalizedUrl = normalizeSourceUrl(resolvedSourceUrl);
   if (!isMediaOutput(params.outputFormat)) {
     throw new Error("URL jobs support only media outputs");
@@ -308,6 +377,7 @@ async function markFailed(jobId: string, userId: string, message: string) {
       status: JobStatus.failed,
       errorMessage: shortMessage,
       completedAt: new Date(),
+      lastErrorAt: new Date(),
     },
   });
 
@@ -321,7 +391,10 @@ async function markFailed(jobId: string, userId: string, message: string) {
   });
 }
 
-export async function processConversionJob(jobId: string) {
+export async function processConversionJob(jobId: string, attemptContext?: { attempt: number; maxAttempts: number }) {
+  const attempt = attemptContext?.attempt ?? 1;
+  const maxAttempts = attemptContext?.maxAttempts ?? config.queueAttempts;
+
   const dbJob = await prisma.job.findUnique({
     where: { id: jobId },
     include: { files: true },
@@ -342,7 +415,13 @@ export async function processConversionJob(jobId: string) {
 
   await prisma.job.update({
     where: { id: dbJob.id },
-    data: { status: JobStatus.processing, startedAt: new Date(), errorMessage: null },
+    data: {
+      status: JobStatus.processing,
+      attemptCount: attempt,
+      maxAttempts,
+      startedAt: new Date(),
+      errorMessage: null,
+    },
   });
 
   try {
@@ -427,6 +506,36 @@ export async function processConversionJob(jobId: string) {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     logger.error({ error, jobId: dbJob.id }, "Job failed");
+
+    if (attempt < maxAttempts) {
+      const shortMessage = normalizeFailureMessage(message);
+      await prisma.$transaction([
+        prisma.job.update({
+          where: { id: dbJob.id },
+          data: {
+            status: JobStatus.queued,
+            startedAt: null,
+            completedAt: null,
+            lastErrorAt: new Date(),
+            errorMessage: `Retry ${attempt}/${maxAttempts}: ${shortMessage}`,
+          },
+        }),
+        prisma.auditEvent.create({
+          data: {
+            userId: dbJob.userId,
+            jobId: dbJob.id,
+            eventType: "job.retry.scheduled",
+            metadata: {
+              attempt,
+              maxAttempts,
+              message: shortMessage,
+            },
+          },
+        }),
+      ]);
+      throw error;
+    }
+
     await markFailed(dbJob.id, dbJob.userId, message);
     throw error;
   }

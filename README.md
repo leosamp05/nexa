@@ -12,8 +12,7 @@ Built with Next.js + BullMQ worker + Redis + PostgreSQL, designed to run on a VP
 ### File conversion
 ![Nexa file conversion](docs/screenshots/dashboard-file.png)
 
-### Mobile view
-![Nexa mobile view](docs/screenshots/dashboard-mobile.png)
+Note: public screenshots have IP and sample URL blurred.
 
 ## Features
 
@@ -21,11 +20,15 @@ Built with Next.js + BullMQ worker + Redis + PostgreSQL, designed to run on a VP
 - File conversion via upload (drag and drop)
 - Audio/video/document output formats
 - Async queue processing (BullMQ + Redis)
+- Retry policy with exponential backoff and retry visibility in UI
 - Job tracking with statuses (`queued`, `processing`, `done`, `failed`, `expired`, `canceled`)
 - Automatic cleanup after 24h
 - Optional authentication mode (`AUTH_REQUIRED=true`)
 - IP-isolated sessions when auth is disabled
 - Rate limiting and optional CAPTCHA on URL submit
+- URL hardening (protocol/port policy, DNS resolution, private-network SSRF block)
+- Upload hardening (MIME signature checks, optional antivirus scan)
+- Built-in health and Prometheus metrics endpoints
 
 ## Supported formats
 
@@ -41,9 +44,9 @@ Built with Next.js + BullMQ worker + Redis + PostgreSQL, designed to run on a VP
 - `apps/worker`: queue consumer + converters (`ffmpeg`, `yt-dlp`, `libreoffice`)
 - `postgres`: jobs, files, users, audit events
 - `redis`: BullMQ queue backend
-- `caddy`: reverse proxy and TLS termination
+- `caddy`: reverse proxy and TLS termination (optional)
 
-## Quick start (Docker)
+## Quick start (guided installer)
 
 ### 1. Clone
 
@@ -52,23 +55,50 @@ git clone https://github.com/leosamp05/nexa.git
 cd nexa
 ```
 
-### 2. Configure environment
+### 2. Run installer
 
-Create `.env` in project root:
+```bash
+npm run setup
+```
+
+The installer asks:
+
+- profile: `Development` or `Production`
+- install mode: `Docker` or `Normale (Node.js locale)`
+- app host/IP (default `localhost`)
+- app port (default `3001`)
+- optional Caddy reverse proxy (Docker mode)
+- optional admin seed credentials (when auth is enabled)
+
+Then it updates `.env` and executes the right setup flow automatically.
+
+### 3. Open app
+
+- `http://localhost:3001` (or the host/port you selected)
+
+## Manual Docker setup (optional)
+
+If you do not want the wizard, create `.env` manually and run Docker yourself.
 
 ```env
 DATABASE_URL=postgresql://postgres:postgres@postgres:5432/convertitore?schema=public
 REDIS_URL=redis://redis:6379
 SESSION_SECRET=<long-random-secret>
-APP_URL=http://localhost:3000
+APP_URL=http://localhost:3001
 APP_DOMAIN=localhost
+APP_BIND_IP=127.0.0.1
+APP_PORT=3001
 DATA_DIR=/app/storage
 MAX_UPLOAD_BYTES=524288000
 MAX_DURATION_SECONDS=3600
 JOB_TIMEOUT_MS=900000
 RATE_LIMIT_WINDOW_SEC=60
 RATE_LIMIT_MAX=25
+QUEUE_ATTEMPTS=3
+QUEUE_RETRY_DELAY_MS=5000
 WORKER_CONCURRENCY=2
+ANTIVIRUS_ENABLED=false
+LOG_LEVEL=info
 CAPTCHA_ENABLED=false
 CAPTCHA_VERIFY_URL=https://challenges.cloudflare.com/turnstile/v0/siteverify
 CAPTCHA_SECRET=
@@ -80,25 +110,16 @@ AUTH_REQUIRED=false
 SENTRY_DSN=
 ```
 
-Optional seed user (only if you want initial credentials):
+Optional seed user:
 
 ```env
 ADMIN_EMAIL=admin@example.com
 ADMIN_PASSWORD=change-me-now
 ```
 
-### 3. Start services
-
 ```bash
-docker compose up -d --build
+docker compose up -d --build postgres redis web worker
 ```
-
-### 4. Open app
-
-- `http://localhost` (redirects to HTTPS)
-- `https://localhost`
-
-Note: on first access with local TLS you may see a browser certificate warning.
 
 ## Authentication modes
 
@@ -127,15 +148,18 @@ Note: on first access with local TLS you may see a browser certificate warning.
 - `DELETE /api/jobs/:id`
 - `POST /api/jobs/:id/cancel`
 - `GET /api/health`
+- `GET /api/metrics`
 
 ## Local development
+
+Prerequisite: local PostgreSQL (`localhost:5432`) and Redis (`localhost:6379`) running.
 
 ```bash
 npm install
 npm run prisma:generate
-npm run prisma:migrate:dev -- --name init
+npm run prisma:migrate
 npm run seed
-npm run dev
+npm run dev -w @convertitore/web -- --hostname localhost --port 3001
 npm run dev:worker
 ```
 
@@ -153,6 +177,7 @@ docker compose logs -f web
 
 # Run tests
 npm run test
+npm run test:e2e
 ```
 
 ## Troubleshooting
@@ -178,6 +203,29 @@ The app validates input/output compatibility before enqueueing:
 - media output requires audio/video input
 - document output requires text/document input
 - `pdf -> txt/docx` is currently blocked by design
+
+## Observability
+
+- Health JSON: `/api/health`
+- Prometheus metrics: `/api/metrics`
+
+Core exported metrics:
+
+- `nexa_jobs_total{status=...}`
+- `nexa_queue_jobs{state=...}`
+- `nexa_job_duration_avg_seconds`
+- `nexa_uptime_seconds`
+
+## CI/CD
+
+GitHub Actions workflow:
+
+- `.github/workflows/ci.yml`
+- runs install, Prisma generate, unit tests, e2e smoke tests, build, compose validation, and Docker image builds.
+
+## Operations
+
+Operational runbook: `docs/runbook.md`
 
 ## Project structure
 

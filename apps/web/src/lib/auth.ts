@@ -3,6 +3,7 @@ import { jwtVerify, SignJWT } from "jose";
 import { createHash } from "node:crypto";
 import { cookies, headers } from "next/headers";
 import { NextResponse } from "next/server";
+import { extractClientIpFromHeaderValues } from "@/lib/ip";
 import { prisma } from "@/lib/prisma";
 
 const COOKIE_NAME = "cv_session";
@@ -25,12 +26,11 @@ export function isAuthRequired() {
 
 async function getOrCreateBypassUser() {
   const requestHeaders = headers();
-  const forwarded = requestHeaders.get("x-forwarded-for");
-  const ip =
-    (forwarded ? forwarded.split(",")[0].trim() : null) ??
-    requestHeaders.get("cf-connecting-ip") ??
-    requestHeaders.get("x-real-ip") ??
-    "unknown";
+  const ip = extractClientIpFromHeaderValues({
+    forwarded: requestHeaders.get("x-forwarded-for"),
+    cfConnectingIp: requestHeaders.get("cf-connecting-ip"),
+    realIp: requestHeaders.get("x-real-ip"),
+  });
   const ipHash = createHash("sha256").update(ip).digest("hex").slice(0, 24);
   const email = `ip-${ipHash}@nexa.local`;
 

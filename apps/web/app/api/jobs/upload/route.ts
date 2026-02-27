@@ -9,7 +9,7 @@ import { createUploadJobSchema, inferMimeFromFilename, isUploadConversionSupport
 import { prisma } from "@/lib/prisma";
 import { enqueueConversionJob } from "@/lib/queue";
 import { serializeJob } from "@/lib/serialize";
-import { consumeRateLimit, getClientIp } from "@/lib/security";
+import { consumeRateLimit, detectMimeFromBuffer, getClientIp, isMimeMismatch, scanUploadBuffer } from "@/lib/security";
 import { ensureJobDir, sanitizeFilename, sha256Buffer } from "@/lib/storage";
 
 export const runtime = "nodejs";
@@ -39,18 +39,30 @@ export async function POST(request: NextRequest) {
 
   if (!payload.success) return jsonError(400, "Invalid payload");
 
-  const mime = String(file.type || lookup(file.name) || inferMimeFromFilename(file.name)).toLowerCase();
-  const compatibility = isUploadConversionSupported(mime, payload.data.outputFormat);
+  const safeName = sanitizeFilename(file.name);
+  const buffer = Buffer.from(await file.arrayBuffer());
+
+  const reportedMime = String(file.type || lookup(file.name) || inferMimeFromFilename(file.name)).toLowerCase();
+  const detectedMime = detectMimeFromBuffer(buffer, safeName);
+  if (detectedMime && reportedMime && isMimeMismatch(reportedMime, detectedMime)) {
+    return jsonError(400, "Detected file type does not match declared type");
+  }
+  const effectiveMime = (detectedMime ?? reportedMime).toLowerCase();
+
+  const compatibility = isUploadConversionSupported(effectiveMime, payload.data.outputFormat);
   if (!compatibility.ok) return jsonError(400, compatibility.reason);
 
+  const scan = await scanUploadBuffer(buffer, safeName);
+  if (!scan.ok) return jsonError(400, scan.reason);
+
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-  const safeName = sanitizeFilename(file.name);
 
   const dbJob = await prisma.job.create({
     data: {
       userId: user.id,
       sourceType: "upload",
       inputFilename: safeName,
+      maxAttempts: appConfig.queueAttempts,
       outputFormat: payload.data.outputFormat,
       purpose: "personal",
       hasRights: false,
@@ -64,7 +76,6 @@ export async function POST(request: NextRequest) {
   const jobDir = await ensureJobDir(dbJob.id);
   const extension = path.extname(safeName);
   const inputPath = path.join(jobDir, `input${extension}`);
-  const buffer = Buffer.from(await file.arrayBuffer());
   await fs.writeFile(inputPath, buffer);
 
   await prisma.fileArtifact.create({
@@ -73,7 +84,7 @@ export async function POST(request: NextRequest) {
       kind: "input",
       path: inputPath,
       filename: safeName,
-      mimeType: String(mime),
+      mimeType: String(effectiveMime),
       sizeBytes: BigInt(file.size),
       sha256: await sha256Buffer(buffer),
       expiresAt,
