@@ -80,6 +80,10 @@ Then it updates `.env` and executes the right setup flow automatically.
 
 If you do not want the wizard, create `.env` manually and run Docker yourself.
 
+```bash
+cp .env.example .env
+```
+
 ```env
 DATABASE_URL=postgresql://postgres:postgres@postgres:5432/convertitore?schema=public
 REDIS_URL=redis://redis:6379
@@ -221,6 +225,7 @@ Core exported metrics:
 GitHub Actions workflow:
 
 - `.github/workflows/ci.yml`
+- CI creates a temporary `.env` from `.env.example` before Docker Compose validation
 - runs install, Prisma generate, unit tests, e2e smoke tests, build, compose validation, and Docker image builds.
 
 ## Operations

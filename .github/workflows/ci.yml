@@ -32,6 +32,9 @@ jobs:
       - name: Build workspaces
         run: npm run build
 
+      - name: Prepare CI env file
+        run: cp .env.example .env
+
       - name: Validate Docker Compose
         run: docker compose config -q
 
