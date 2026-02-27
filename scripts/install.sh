@@ -4,9 +4,40 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${ROOT_DIR}/.env"
 
+if [[ -t 1 ]]; then
+  BLUE="\033[1;34m"
+  RESET="\033[0m"
+else
+  BLUE=""
+  RESET=""
+fi
+
+print_banner() {
+  printf "\n%s" "${BLUE}"
+  cat <<'EOF'
+                            _____                                    
+  _____    _____       _____\    \ _____       _____   _____         
+  |\    \   \    \     /    / |    |\    \     /    / /      |_       
+  \\    \   |    |   /    /  /___/| \    |   |    / /         \      
+    \\    \  |    |  |    |__ |___|/  \    \ /    / |     /\    \     
+    \|    \ |    |  |       \         \    |    /  |    |  |    \    
+      |     \|    |  |     __/ __      /    |    \  |     \/      \   
+    /     /\      \ |\    \  /  \    /    /|\    \ |\      /\     \  
+    /_____/ /______/|| \____\/    |  |____|/ \|____|| \_____\ \_____\ 
+  |      | |     | || |    |____/|  |    |   |    || |     | |     | 
+  |______|/|_____|/  \|____|   | |  |____|   |____| \|_____|\|_____| 
+                            |___|/                                    
+EOF
+  printf "%s\n" "${RESET}"
+}
+
 print_title() {
-  printf "\nNexa installer guidato\n"
-  printf "======================\n"
+  print_banner
+  printf "Nexa installer guidato\n"
+  printf "======================\n\n"
+  printf "Profili:\n"
+  printf "  - Development: setup locale rapido, log piu dettagliati.\n"
+  printf "  - Production: default piu sicuri e adatti a VPS/ambiente pubblico.\n"
 }
 
 print_step() {
@@ -234,7 +265,8 @@ if [[ "$INSTALL_MODE" == "docker" ]]; then
   if [[ "$AUTH_REQUIRED_ANSWER" == "yes" ]]; then
     set_env_var "AUTH_REQUIRED" "true"
     admin_email="$(prompt_with_default "Email admin iniziale (seed opzionale)" "admin@example.com")"
-    read -r -p "Password admin iniziale (lascia vuoto per saltare): " admin_password
+    read -r -s -p "Password admin iniziale (lascia vuoto per saltare): " admin_password
+    printf "\n"
     if [[ -n "$admin_password" ]]; then
       set_env_var "ADMIN_EMAIL" "$admin_email"
       set_env_var "ADMIN_PASSWORD" "$admin_password"
@@ -267,7 +299,8 @@ set_env_var "DATA_DIR" "${ROOT_DIR}/storage"
 if [[ "$AUTH_REQUIRED_ANSWER" == "yes" ]]; then
   set_env_var "AUTH_REQUIRED" "true"
   admin_email="$(prompt_with_default "Email admin iniziale (seed opzionale)" "admin@example.com")"
-  read -r -p "Password admin iniziale (lascia vuoto per saltare): " admin_password
+  read -r -s -p "Password admin iniziale (lascia vuoto per saltare): " admin_password
+  printf "\n"
   if [[ -n "$admin_password" ]]; then
     set_env_var "ADMIN_EMAIL" "$admin_email"
     set_env_var "ADMIN_PASSWORD" "$admin_password"
