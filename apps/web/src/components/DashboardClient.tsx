@@ -524,6 +524,26 @@ export function DashboardClient({ clientIp, authRequired, initialJobs, captchaEn
                 onDragLeave={onDragLeave}
                 onDrop={onDrop}
               >
+                <span className="dropzone-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" role="presentation">
+                    <path
+                      d="M7.5 18.5H6.75C4.68 18.5 3 16.82 3 14.75C3 13.02 4.19 11.52 5.84 11.13C6.3 8.2 8.84 6 11.9 6C14.72 6 17.12 7.89 17.79 10.61C19.58 10.83 21 12.35 21 14.2C21 16.2 19.37 17.83 17.37 17.83H16.5"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.7"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                    <path
+                      d="M12 19.5V11.5M12 11.5L8.9 14.6M12 11.5L15.1 14.6"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.9"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </span>
                 <span className="dropzone-title">
                   {selectedFile ? selectedFile.name : "Drag and drop a file here or click to select"}
                 </span>
