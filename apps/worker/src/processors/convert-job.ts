@@ -78,12 +78,14 @@ function isTransientDnsError(error: unknown) {
   return code === "EAI_AGAIN" || code === "ETIMEOUT" || code === "ENETUNREACH";
 }
 
+type DnsAddressRecord = { address: string; family: number };
+
 async function lookupWithRetry(host: string, attempts = 3) {
   let lastError: unknown = null;
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      return await dns.lookup(host, { all: true, verbatim: true }) as dns.LookupAddress[];
+      return await dns.lookup(host, { all: true, verbatim: true }) as DnsAddressRecord[];
     } catch (error) {
       lastError = error;
       if (attempt >= attempts || !isTransientDnsError(error)) break;
@@ -95,7 +97,7 @@ async function lookupWithRetry(host: string, attempts = 3) {
 }
 
 async function ensureHostResolvesToPublicIps(host: string) {
-  let records: dns.LookupAddress[];
+  let records: DnsAddressRecord[];
   try {
     records = await lookupWithRetry(host, 3);
   } catch (error) {
