@@ -73,6 +73,7 @@ services:
       sh -c "npm run prisma:migrate && npm run start -w @convertitore/worker"
 
   caddy:
+    profiles: ["caddy"]
     image: caddy:2-alpine
     restart: unless-stopped
     ports:

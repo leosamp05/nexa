@@ -32,8 +32,21 @@ describe("deployment safety", () => {
     expect(envExample).not.toContain("ADMIN_PASSWORD=change-me-now");
     expect(envExample).not.toContain("ADMIN_EMAIL=admin@example.com");
     expect(installer).not.toContain("date +%s | shasum");
-    expect(installer).toContain('if [[ "${1:-}" == "--ensure-secrets" ]]');
+    expect(installer).toContain('case "${1:-}" in');
+    expect(installer).toContain("--ensure-secrets)");
     expect(installer).toContain("replace-with-a-separate-long-random-secret");
+    expect(installer).toContain("tr '[:upper:]' '[:lower:]'");
+    expect(installer).toContain('REGISTRATION_ENABLED" "false"');
+    expect(installer).toContain('configure_admin_seed "yes"');
+    expect(read("scripts/seed-admin.ts")).toContain('role: "ADMIN"');
+    expect(read("prisma/schema.prisma")).toContain("@default(USER)");
+  });
+
+  it("keeps Caddy opt-in and requires HTTPS for remote authenticated installs", () => {
+    const compose = read("docker-compose.yml");
+    const installer = read("scripts/install.sh");
+    expect(compose).toContain('profiles: ["caddy"]');
+    expect(installer).toContain("Authenticated remote installs require HTTPS");
   });
 
   it("keeps the direct Next.js port on loopback when Caddy is enabled", () => {

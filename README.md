@@ -24,7 +24,7 @@ Nexa is intended for controlled self-hosted use. The default configuration is lo
 | --- | --- |
 | ![Nexa URL conversion](docs/screenshots/dashboard-url.png) | ![Nexa file conversion](docs/screenshots/dashboard-file.png) |
 
-Public screenshots have example URLs and IP addresses blurred.
+Screenshots use demonstration data; do not publish captures from a real instance without reviewing URLs, IP addresses, filenames, and job metadata.
 
 ## Contents
 
@@ -108,7 +108,8 @@ Prerequisites:
 
 - Git
 - Docker Engine or Docker Desktop with Compose v2; legacy `docker-compose` is also detected
-- Node.js 20 and npm to use the `npm run setup` wrapper
+- Bash 3.2 or newer
+- Node.js 24+ and npm to use the `npm run setup` wrapper and native `--env-file` commands
 - A DNS name pointing at the host, plus reachable ports 80/443, when enabling public Caddy TLS
 
 ```bash
@@ -126,15 +127,15 @@ bash scripts/install.sh
 The installer writes `.env`, creates `storage/`, generates independent runtime secrets, and asks for:
 
 - `Development` or `Production` profile
-- Docker (recommended) or native Node.js mode
+- Docker (recommended) or native Node.js development mode
 - application host and port
 - whether login authentication is required
 - optional Caddy on ports 80/443 in Docker mode
-- optional initial account credentials when authentication is enabled
+- public self-registration policy and initial admin credentials when authentication is enabled
 
 The development profile defaults to `AUTH_REQUIRED=false` and `LOG_LEVEL=debug`; production defaults to `AUTH_REQUIRED=true` and `LOG_LEVEL=info`. Every choice remains interactive.
 
-Docker mode builds and starts PostgreSQL, Redis, web, and worker, plus Caddy when selected. Native mode installs dependencies, generates Prisma Client, deploys migrations, runs the optional seed, and prints the two development commands; it does not leave the web or worker running.
+Docker mode builds and starts PostgreSQL, Redis, web, and worker, plus Caddy when selected. Native mode is development-only: it installs dependencies, generates Prisma Client, deploys migrations, invokes the seed command with the root `.env`, and prints two explicit environment-aware development commands; it does not leave the web or worker running.
 
 Without Caddy, open `http://HOST:PORT` (default `http://localhost:3001`). With Caddy, open `https://APP_DOMAIN`. Use HTTPS for non-local authenticated deployments because production session cookies are marked `Secure`.
 
@@ -147,7 +148,9 @@ cp .env.example .env
 bash scripts/install.sh --ensure-secrets
 ```
 
-Review `.env` before starting. At minimum, choose the exposure and authentication model, set `APP_DOMAIN` for Caddy, and provide optional seed credentials only if needed.
+Review `.env` before starting. At minimum, choose the exposure and authentication model and set `APP_DOMAIN` for Caddy. When authentication is enabled and public registration remains disabled, configure the initial admin seed or the instance will have no login path.
+
+The Compose database name, user, password, and app-container connection URL are fixed in `docker-compose.yml`; changing only `DATABASE_URL` in `.env` does not reconfigure that internal database. PostgreSQL and Redis are not published on host ports by the supplied stack.
 
 Start the core stack without Caddy:
 
@@ -173,11 +176,11 @@ docker compose logs --tail=100 web worker
 curl -i http://127.0.0.1:3001/api/health
 ```
 
-Use the HTTPS domain instead of the direct URL when Caddy is enabled.
+Use the HTTPS domain instead of the direct URL when Caddy is enabled. With `APP_DOMAIN=localhost`, Caddy uses its internal CA; clients do not trust that certificate automatically.
 
 ### Local development
 
-Native conversion requires Node.js 20, PostgreSQL, Redis, FFmpeg/FFprobe, `yt-dlp`, LibreOffice (`soffice`), and Poppler (`pdftotext`) on the host. `clamscan` is additionally required only when antivirus scanning is enabled.
+Native conversion requires Node.js 24+, PostgreSQL, Redis, FFmpeg/FFprobe, `yt-dlp`, LibreOffice (`soffice`), and Poppler (`pdftotext`) on the host. `clamscan` is additionally required only when antivirus scanning is enabled.
 
 The guided installer can prepare native mode. For a manual setup:
 
@@ -196,30 +199,25 @@ APP_BIND_IP=localhost
 APP_PORT=3001
 ```
 
-Load the root environment into the shell that runs Prisma, the web process, and the worker; the worker does not load the root `.env` itself.
-
 ```bash
-set -a
-source .env
-set +a
 npm ci --legacy-peer-deps
 npm run prisma:generate
 npm run prisma:migrate
-npm run seed
+node --env-file=.env ./node_modules/tsx/dist/cli.mjs scripts/seed-admin.ts
 ```
 
-Start the processes in separate shells, loading `.env` in each:
+Prisma CLI loads the root `.env`; the seed and workspace runtimes do not load it completely. Start the processes in separate shells with Node's explicit environment-file support:
 
 ```bash
 # terminal 1
-set -a; source .env; set +a
-npm run dev -w @convertitore/web -- --hostname localhost --port 3001
+cd apps/web
+node --env-file=../../.env ../../node_modules/next/dist/bin/next dev --hostname localhost --port 3001
 ```
 
 ```bash
 # terminal 2
-set -a; source .env; set +a
-npm run dev:worker
+cd apps/worker
+node --env-file=../../.env ../../node_modules/tsx/dist/cli.mjs src/index.ts
 ```
 
 Use `npm run prisma:migrate:dev` only when authoring a new development migration; normal setup and deployment use `npm run prisma:migrate`.
@@ -239,7 +237,7 @@ The UI uses these server endpoints. Job endpoints always scope data to the curre
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `POST` | `/api/auth/login` | Create a signed session when auth is enabled |
-| `POST` | `/api/auth/register` | Self-register an account when auth is enabled |
+| `POST` | `/api/auth/register` | Self-register a `USER` account only when auth and registration are enabled |
 | `POST` | `/api/auth/logout` | Clear the session |
 | `POST` | `/api/jobs/url` | Submit a JSON URL conversion request |
 | `POST` | `/api/jobs/upload` | Stream one `multipart/form-data` upload |
@@ -270,7 +268,8 @@ Job states are `queued`, `processing`, `done`, `failed`, `canceled`, and `expire
 | `APP_BIND_IP` | `127.0.0.1` | Host interface used for the direct Compose web port |
 | `APP_PORT` | `3001` | Host port mapped to Next.js port 3000 |
 | `DATA_DIR` | `/app/storage` in Compose | Shared job and temporary-upload root |
-| `AUTH_REQUIRED` | `false` | Enable signed-cookie login and self-service registration |
+| `AUTH_REQUIRED` | `false` | Enable signed-cookie login |
+| `REGISTRATION_ENABLED` | `false` | Allow public self-registration of non-admin `USER` accounts |
 | `LOG_LEVEL` | `info` | Pino log level for web and worker |
 | `ADMIN_EMAIL` | empty | Optional account seeded/upserted during web startup |
 | `ADMIN_PASSWORD` | empty | Optional seed password; minimum 12 characters |
@@ -315,7 +314,7 @@ curl http://127.0.0.1:3001/api/metrics
 docker compose logs -f web worker
 ```
 
-`/api/health` returns HTTP 200 with `status: "ok"`, or 503 with `status: "degraded"`, and reports database, Redis, and queue checks. `/api/metrics` exports:
+`/api/health` returns HTTP 200 with `status: "ok"`, or 503 with `status: "degraded"`, and reports database, Redis, and queue checks. It does not check worker readiness or converter binaries. `/api/metrics` exports:
 
 - `nexa_uptime_seconds`
 - `nexa_jobs_total{status="..."}`
@@ -366,14 +365,14 @@ The more detailed incident and upgrade checklist is in [docs/runbook.md](docs/ru
 
 - **Network exposure:** Compose binds the web service to loopback by default. Keep that setting behind Caddy. Do not expose direct HTTP with `AUTH_REQUIRED=false` to untrusted users.
 - **Auth-disabled identity:** behind the included Caddy with a valid proxy token, jobs are partitioned by a hash of the authenticated client IP. Direct requests intentionally share the stable `direct` identity because Next.js route handlers cannot verify the peer IP. Direct multi-user access therefore shares job history and downloads.
-- **Authentication:** enabled mode uses Argon2 password hashes and a seven-day signed, HTTP-only, same-site cookie. Docker production cookies are `Secure`, so non-local deployments need HTTPS. The built-in registration endpoint is open to any reachable visitor; this is not invite-only authentication.
+- **Authentication:** enabled mode uses Argon2 password hashes and a seven-day signed, HTTP-only, same-site cookie. Docker production cookies are `Secure`, so non-local deployments need HTTPS. Public registration is disabled by default; when explicitly enabled, new accounts receive the non-admin `USER` role. The optional seed is the only path that promotes an account to `ADMIN`.
 - **Secrets:** `SESSION_SECRET` and `TRUSTED_PROXY_TOKEN` must be independent random values. `scripts/install.sh --ensure-secrets` replaces the documented placeholders. Never publish `.env` or retain an initial seed password longer than necessary.
 - **Source URL defense:** admission permits only HTTP(S), ports 80/443, configured hosts, and public DNS results. The worker repeats validation and forces every `yt-dlp` request through an address-pinning proxy that rejects private and special-use destinations, including redirects to local networks.
 - **Upload defense:** uploads are streamed with bounded multipart fields, byte limits, mode-0600 temporary files, SHA-256 hashes, signature-based type detection, MIME-family checks, sanitized names, and data-directory path containment.
 - **Document defense:** converted DOCX/ODT ZIP metadata is bounded before LibreOffice to reduce archive-expansion abuse. Converter commands have timeouts, bounded captured output, process-tree cancellation, and isolated run directories.
 - **Rate limiting and CAPTCHA:** Redis counters protect submissions and auth routes. Rate limiting fails open if Redis errors; URL jobs still cannot enqueue without Redis. CAPTCHA applies only to URL submissions.
 - **Antivirus:** `ANTIVIRUS_ENABLED=true` requires `clamscan` and current signatures in the **web** runtime. The stock `Dockerfile.web` does not install ClamAV, so enabling it unchanged rejects uploads with `Antivirus scan failed`; build a custom web image first.
-- **Reverse proxy:** the included Caddy configuration limits request bodies, sets HSTS/CSP and other browser headers, strips untrusted Cloudflare IP headers, and signs its forwarded IP headers with `TRUSTED_PROXY_TOKEN`.
+- **Reverse proxy:** the included Caddy configuration limits request bodies, sets HSTS/CSP and other browser headers, strips untrusted Cloudflare IP headers, overwrites forwarding headers, and injects a separate bearer-style `TRUSTED_PROXY_TOKEN` known to the web service. Keep the direct web port unreachable to clients.
 
 Converters process untrusted and potentially copyrighted content. Keep system packages and images current, restrict access, monitor resource usage, and only process content you are authorized to use.
 
@@ -384,12 +383,13 @@ Install exactly from the lockfile and generate Prisma Client before running chec
 ```bash
 npm ci --legacy-peer-deps
 npm run prisma:generate
+npx playwright install --with-deps chromium
 npm run test
 npm run test:e2e
 npm run build
 ```
 
-`npm run test` runs the web and worker Vitest suites. They cover request boundaries, upload streaming, storage containment, SSRF/egress policy, conversion behavior, retries, cancellation, cleanup, and deployment safety. `npm run test:e2e` starts the web app on port 3010 and performs the health smoke test; a degraded dependency result is accepted as long as the endpoint contract is valid.
+`npm run test` runs the web and worker Vitest suites. They cover request boundaries, upload streaming, storage containment, SSRF/egress policy, conversion behavior, retries, cancellation, cleanup, and deployment safety. `npm run test:e2e` starts the web app on port 3010 and performs the health smoke test; a degraded dependency result is accepted as long as the endpoint contract is valid, so it does not prove worker or converter readiness.
 
 With `.env` present, validate deployment configuration and images using the same commands as CI:
 
@@ -451,7 +451,7 @@ Direct auth-disabled requests share one identity by design. Use the included Cad
 
 ### Native worker cannot connect or ignores `.env`
 
-Export the root `.env` variables in the worker shell before `npm run dev:worker`. In native mode, `DATABASE_URL` and `REDIS_URL` must use reachable host addresses such as `localhost`, not Compose service names.
+Use the explicit `node --env-file=...` commands in [Local development](#local-development). In native mode, `DATABASE_URL` and `REDIS_URL` must use reachable host addresses such as `localhost`, not Compose service names.
 
 ## Project structure
 

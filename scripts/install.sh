@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${NEXA_ENV_FILE:-${ROOT_DIR}/.env}"
+cd "$ROOT_DIR"
 
 BLUE=$'\033[1;34m'
 RESET=$'\033[0m'
@@ -52,8 +53,8 @@ prompt_yes_no() {
   local default_value="$2"
   local answer
   read -r -p "${label} [${default_value}]: " answer
-  answer="${answer:-$default_value}"
-  case "${answer,,}" in
+  answer="$(printf "%s" "${answer:-$default_value}" | tr '[:upper:]' '[:lower:]')"
+  case "$answer" in
     y|yes) printf "yes" ;;
     n|no) printf "no" ;;
     *)
@@ -162,17 +163,66 @@ configure_common_env_defaults() {
   set_env_if_missing "ALLOWED_SOURCE_HOSTS" "youtube.com,youtu.be,soundcloud.com,vimeo.com,bandcamp.com"
   set_env_if_missing "BLOCKED_SOURCE_PATTERNS" "music.youtube.com"
   set_env_if_missing "AUTH_REQUIRED" "false"
+  set_env_if_missing "REGISTRATION_ENABLED" "false"
   set_env_if_missing "LOG_LEVEL" "info"
   set_env_if_missing "SENTRY_DSN" ""
 
   ensure_runtime_secrets
 }
 
-if [[ "${1:-}" == "--ensure-secrets" ]]; then
-  ensure_runtime_secrets
-  printf "Runtime secrets are configured.\n"
-  exit 0
-fi
+configure_admin_seed() {
+  local required="$1"
+  local admin_email
+  local admin_password
+
+  admin_email="$(prompt_with_default "Initial admin email" "admin@example.com")"
+  while true; do
+    if [[ "$required" == "yes" ]]; then
+      read -r -s -p "Initial admin password (required, minimum 12 characters): " admin_password
+    else
+      read -r -s -p "Initial admin password (leave empty to skip): " admin_password
+    fi
+    printf "\n"
+
+    if [[ -z "$admin_password" ]]; then
+      if [[ "$required" == "yes" ]]; then
+        printf "An initial admin password is required while public registration is disabled.\n" >&2
+        continue
+      fi
+      set_env_var "ADMIN_EMAIL" ""
+      set_env_var "ADMIN_PASSWORD" ""
+      return
+    fi
+
+    if [[ ${#admin_password} -lt 12 || "$admin_password" == "change-me-now" ]]; then
+      printf "Admin password must be at least 12 characters and must not use the example default.\n" >&2
+      continue
+    fi
+
+    set_env_var "ADMIN_EMAIL" "$admin_email"
+    set_env_var "ADMIN_PASSWORD" "$admin_password"
+    return
+  done
+}
+
+case "${1:-}" in
+  "") ;;
+  --ensure-secrets)
+    ensure_runtime_secrets
+    printf "Runtime secrets are configured.\n"
+    exit 0
+    ;;
+  -h|--help)
+    printf "Usage: bash scripts/install.sh [--ensure-secrets|--help]\n"
+    printf "Without options, starts the guided installer.\n"
+    exit 0
+    ;;
+  *)
+    printf "Unknown option: %s\n" "$1" >&2
+    printf "Usage: bash scripts/install.sh [--ensure-secrets|--help]\n" >&2
+    exit 2
+    ;;
+esac
 
 print_title
 printf "Choose profile:\n"
@@ -207,7 +257,11 @@ while [[ -z "$INSTALL_MODE" ]]; do
       INSTALL_MODE="docker"
       ;;
     2|normale|normal|native)
-      INSTALL_MODE="native"
+      if [[ "$PROFILE_MODE" == "production" ]]; then
+        printf "Native mode is for local development only. Choose Docker for the production profile.\n"
+      else
+        INSTALL_MODE="native"
+      fi
       ;;
     *)
       printf "Invalid choice. Enter 1 or 2.\n"
@@ -245,8 +299,17 @@ set_env_var "APP_DOMAIN" "$APP_HOST"
 set_env_var "APP_PORT" "$APP_PORT"
 if [[ "$AUTH_REQUIRED_ANSWER" == "yes" ]]; then
   set_env_var "AUTH_REQUIRED" "true"
+  while true; do
+    REGISTRATION_ANSWER="$(prompt_yes_no "Allow public self-registration" "no")" && break
+  done
+  if [[ "$REGISTRATION_ANSWER" == "yes" ]]; then
+    set_env_var "REGISTRATION_ENABLED" "true"
+  else
+    set_env_var "REGISTRATION_ENABLED" "false"
+  fi
 else
   set_env_var "AUTH_REQUIRED" "false"
+  set_env_var "REGISTRATION_ENABLED" "false"
 fi
 set_env_var "LOG_LEVEL" "$LOG_LEVEL_DEFAULT"
 
@@ -258,6 +321,11 @@ if [[ "$INSTALL_MODE" == "docker" ]]; then
     USE_CADDY="$(prompt_yes_no "Enable Caddy reverse proxy as well (80/443)" "no")" && break
   done
 
+  if [[ "$AUTH_REQUIRED_ANSWER" == "yes" && "$APP_HOST" != "localhost" && "$APP_HOST" != "127.0.0.1" && "$APP_HOST" != "::1" && "$USE_CADDY" != "yes" ]]; then
+    printf "\nAuthenticated remote installs require HTTPS. Re-run and enable Caddy, or configure an external TLS proxy manually.\n" >&2
+    exit 1
+  fi
+
   compose_cmd="$(detect_compose_cmd)"
   if [[ -z "$compose_cmd" ]]; then
     printf "\nDocker Compose not found. Install Docker Desktop or docker-compose and retry.\n"
@@ -267,6 +335,7 @@ if [[ "$INSTALL_MODE" == "docker" ]]; then
   docker_bind_ip="0.0.0.0"
   if [[ "$USE_CADDY" == "yes" ]]; then
     docker_bind_ip="127.0.0.1"
+    set_env_var "APP_URL" "https://${APP_HOST}"
   elif [[ "$APP_HOST" == "localhost" || "$APP_HOST" == "127.0.0.1" ]]; then
     docker_bind_ip="127.0.0.1"
   fi
@@ -283,15 +352,16 @@ if [[ "$INSTALL_MODE" == "docker" ]]; then
 
   if [[ "$AUTH_REQUIRED_ANSWER" == "yes" ]]; then
     set_env_var "AUTH_REQUIRED" "true"
-    admin_email="$(prompt_with_default "Initial admin email (optional seed)" "admin@example.com")"
-    read -r -s -p "Initial admin password (leave empty to skip): " admin_password
-    printf "\n"
-    if [[ -n "$admin_password" ]]; then
-      set_env_var "ADMIN_EMAIL" "$admin_email"
-      set_env_var "ADMIN_PASSWORD" "$admin_password"
+    if [[ "$REGISTRATION_ANSWER" == "yes" ]]; then
+      configure_admin_seed "no"
+    else
+      configure_admin_seed "yes"
     fi
   else
     set_env_var "AUTH_REQUIRED" "false"
+    set_env_var "REGISTRATION_ENABLED" "false"
+    set_env_var "ADMIN_EMAIL" ""
+    set_env_var "ADMIN_PASSWORD" ""
   fi
 
   print_step "Starting Docker services (${services[*]})"
@@ -319,19 +389,26 @@ set_env_var "REDIS_URL" "redis://localhost:6379"
 set_env_var "DATA_DIR" "${ROOT_DIR}/storage"
 if [[ "$AUTH_REQUIRED_ANSWER" == "yes" ]]; then
   set_env_var "AUTH_REQUIRED" "true"
-  admin_email="$(prompt_with_default "Initial admin email (optional seed)" "admin@example.com")"
-  read -r -s -p "Initial admin password (leave empty to skip): " admin_password
-  printf "\n"
-  if [[ -n "$admin_password" ]]; then
-    set_env_var "ADMIN_EMAIL" "$admin_email"
-    set_env_var "ADMIN_PASSWORD" "$admin_password"
+  if [[ "$REGISTRATION_ANSWER" == "yes" ]]; then
+    configure_admin_seed "no"
+  else
+    configure_admin_seed "yes"
   fi
 else
   set_env_var "AUTH_REQUIRED" "false"
+  set_env_var "REGISTRATION_ENABLED" "false"
+  set_env_var "ADMIN_EMAIL" ""
+  set_env_var "ADMIN_PASSWORD" ""
 fi
 
 if ! command -v npm >/dev/null 2>&1; then
-  printf "\nNode.js/npm not found. Install Node.js (LTS) and retry.\n"
+  printf "\nNode.js/npm not found. Install Node.js 24 or newer and retry.\n"
+  exit 1
+fi
+
+node_major="$(node -p 'Number(process.versions.node.split(".")[0])')"
+if [[ "$node_major" -lt 24 ]]; then
+  printf "\nNode.js 24 or newer is required (found %s).\n" "$(node --version)" >&2
   exit 1
 fi
 
@@ -348,9 +425,9 @@ print_step "Installing dependencies and preparing database"
 run_cmd npm ci --legacy-peer-deps
 run_cmd npm run prisma:generate
 run_cmd npm run prisma:migrate
-run_cmd npm run seed
+run_cmd node --env-file="$ENV_FILE" ./node_modules/tsx/dist/cli.mjs scripts/seed-admin.ts
 
 print_step "Installation completed"
-printf "Start web:    npm run dev -w @convertitore/web -- --hostname %s --port %s\n" "$APP_HOST" "$APP_PORT"
-printf "Start worker: npm run dev -w @convertitore/worker\n"
+printf "Start web:    cd %s/apps/web && node --env-file=%s ../../node_modules/next/dist/bin/next dev --hostname %s --port %s\n" "$ROOT_DIR" "$ENV_FILE" "$APP_HOST" "$APP_PORT"
+printf "Start worker: cd %s/apps/worker && node --env-file=%s ../../node_modules/tsx/dist/cli.mjs src/index.ts\n" "$ROOT_DIR" "$ENV_FILE"
 printf "Open: http://%s:%s\n" "$APP_HOST" "$APP_PORT"

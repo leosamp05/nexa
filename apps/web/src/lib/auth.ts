@@ -27,6 +27,10 @@ export function isAuthRequired() {
   return parseBool(process.env.AUTH_REQUIRED, false);
 }
 
+export function isRegistrationEnabled() {
+  return parseBool(process.env.REGISTRATION_ENABLED, false);
+}
+
 async function getOrCreateBypassUser() {
   const requestHeaders = await headers();
   const ip = extractClientIpFromHeaderValues({
@@ -44,7 +48,7 @@ async function getOrCreateBypassUser() {
     create: {
       email,
       passwordHash: "auth-disabled",
-      role: "ADMIN",
+      role: "USER",
     },
     select: {
       id: true,

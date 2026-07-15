@@ -3,7 +3,7 @@ import { z } from "zod";
 import { jsonError, requireJsonRequest } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
 import { getClientIp, consumeRateLimit } from "@/lib/security";
-import { hashPassword, isAuthRequired, setSessionCookie } from "@/lib/auth";
+import { hashPassword, isAuthRequired, isRegistrationEnabled, setSessionCookie } from "@/lib/auth";
 
 const schema = z.object({
   email: z.string().email(),
@@ -15,6 +15,9 @@ export const runtime = "nodejs";
 export async function POST(request: NextRequest) {
   if (!isAuthRequired()) {
     return jsonError(400, "Auth disabled");
+  }
+  if (!isRegistrationEnabled()) {
+    return jsonError(403, "Registration disabled");
   }
 
   const requestError = requireJsonRequest(request);
@@ -53,6 +56,7 @@ export async function POST(request: NextRequest) {
     data: {
       email: normalizedEmail,
       passwordHash,
+      role: "USER",
     },
     select: {
       id: true,

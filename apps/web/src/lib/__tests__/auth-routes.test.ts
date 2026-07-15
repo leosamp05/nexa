@@ -3,7 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   findUnique: vi.fn().mockResolvedValue(null),
-  createUser: vi.fn().mockResolvedValue({ id: "user-new", email: "fresh@example.com", role: "ADMIN" }),
+  createUser: vi.fn().mockResolvedValue({ id: "user-new", email: "fresh@example.com", role: "USER" }),
+  registrationEnabled: vi.fn().mockReturnValue(true),
   consumeRateLimit: vi.fn().mockResolvedValue(true),
   verifyPassword: vi.fn().mockResolvedValue(false),
   setSessionCookie: vi.fn(),
@@ -12,6 +13,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/auth", () => ({
   isAuthRequired: vi.fn().mockReturnValue(true),
+  isRegistrationEnabled: mocks.registrationEnabled,
   verifyPassword: mocks.verifyPassword,
   hashPassword: vi.fn().mockResolvedValue("hash"),
   setSessionCookie: mocks.setSessionCookie,
@@ -31,7 +33,8 @@ describe("authentication request boundary", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.findUnique.mockResolvedValue(null);
-    mocks.createUser.mockResolvedValue({ id: "user-new", email: "fresh@example.com", role: "ADMIN" });
+    mocks.createUser.mockResolvedValue({ id: "user-new", email: "fresh@example.com", role: "USER" });
+    mocks.registrationEnabled.mockReturnValue(true);
     mocks.consumeRateLimit.mockResolvedValue(true);
     mocks.verifyPassword.mockResolvedValue(false);
     mocks.createAudit.mockResolvedValue({});
@@ -109,7 +112,21 @@ describe("authentication request boundary", () => {
     expect(mocks.consumeRateLimit).toHaveBeenCalledWith("rl:register:global", 50, 60);
     expect(mocks.findUnique).toHaveBeenCalledWith({ where: { email: "fresh@example.com" }, select: { id: true } });
     expect(mocks.createUser).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ email: "fresh@example.com" }),
+      data: expect.objectContaining({ email: "fresh@example.com", role: "USER" }),
     }));
+  });
+
+  it("rejects public registration before consuming expensive admission work when disabled", async () => {
+    mocks.registrationEnabled.mockReturnValue(false);
+    const request = new Request("http://localhost/api/auth/register", {
+      method: "POST",
+      headers: { "content-type": "application/json", "sec-fetch-site": "same-origin" },
+      body: JSON.stringify({ email: "fresh@example.com", password: "Password1!" }),
+    });
+
+    const response = await register(request as never);
+    expect(response.status).toBe(403);
+    expect(mocks.consumeRateLimit).not.toHaveBeenCalled();
+    expect(mocks.createUser).not.toHaveBeenCalled();
   });
 });

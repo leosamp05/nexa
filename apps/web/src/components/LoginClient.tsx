@@ -3,7 +3,7 @@
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 
-export function LoginClient() {
+export function LoginClient({ registrationEnabled }: { registrationEnabled: boolean }) {
   const router = useRouter();
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
@@ -51,29 +51,31 @@ export function LoginClient() {
         </p>
 
         <form className="grid" onSubmit={onSubmit}>
-          <div className={`source-menu segmented-control auth-switch ${mode === "login" ? "is-index-0" : "is-index-1"}`}>
-            <span className="segmented-indicator" aria-hidden />
-            <button
-              type="button"
-              className={`source-tab ${mode === "login" ? "active" : ""}`}
-              onClick={() => {
-                setMode("login");
-                setError(null);
-              }}
-            >
-              Login
-            </button>
-            <button
-              type="button"
-              className={`source-tab ${mode === "register" ? "active" : ""}`}
-              onClick={() => {
-                setMode("register");
-                setError(null);
-              }}
-            >
-              Register
-            </button>
-          </div>
+          {registrationEnabled ? (
+            <div className={`source-menu segmented-control auth-switch ${mode === "login" ? "is-index-0" : "is-index-1"}`}>
+              <span className="segmented-indicator" aria-hidden />
+              <button
+                type="button"
+                className={`source-tab ${mode === "login" ? "active" : ""}`}
+                onClick={() => {
+                  setMode("login");
+                  setError(null);
+                }}
+              >
+                Login
+              </button>
+              <button
+                type="button"
+                className={`source-tab ${mode === "register" ? "active" : ""}`}
+                onClick={() => {
+                  setMode("register");
+                  setError(null);
+                }}
+              >
+                Register
+              </button>
+            </div>
+          ) : null}
 
           <div className="grid field-stack">
             <label htmlFor="email">Email</label>

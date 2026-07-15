@@ -9,6 +9,7 @@ datasource db {
 
 enum UserRole {
   ADMIN
+  USER
 }
 
 enum JobSourceType {
@@ -63,7 +64,7 @@ model User {
   id           String      @id @default(cuid())
   email        String      @unique
   passwordHash String
-  role         UserRole    @default(ADMIN)
+  role         UserRole    @default(USER)
   createdAt    DateTime    @default(now())
   updatedAt    DateTime    @updatedAt
   jobs         Job[]
