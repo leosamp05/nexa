@@ -4,7 +4,8 @@ import { getCurrentUser } from "@/lib/auth";
 import { appConfig } from "@/lib/config";
 import { prisma } from "@/lib/prisma";
 import { createUrlJobSchema } from "@/lib/jobs";
-import { enqueueConversionJob } from "@/lib/queue";
+import { logger } from "@/lib/logger";
+import { enqueueConversionJob, removeQueuedJob } from "@/lib/queue";
 import { consumeRateLimit, getClientIp, validateSourceUrl, verifyCaptcha } from "@/lib/security";
 import { serializeJob } from "@/lib/serialize";
 
@@ -53,11 +54,9 @@ export async function POST(request: NextRequest) {
       data: { queueJobId: String(queueJob.id) },
     });
   } catch {
-    await prisma.job.update({
-      where: { id: dbJob.id },
-      data: { status: "failed", errorMessage: "Queue unavailable" },
-    });
-    return jsonError(500, "Queue unavailable");
+    await removeQueuedJob(dbJob.id).catch(() => undefined);
+    await prisma.job.delete({ where: { id: dbJob.id } }).catch(() => undefined);
+    return jsonError(503, "Queue unavailable");
   }
 
   await prisma.auditEvent.create({
@@ -72,6 +71,8 @@ export async function POST(request: NextRequest) {
         purpose: "personal",
       },
     },
+  }).catch((error) => {
+    logger.error({ error, jobId: dbJob.id }, "Failed to persist URL submission audit event");
   });
 
   return NextResponse.json({ job: serializeJob(dbJob) }, { status: 201 });

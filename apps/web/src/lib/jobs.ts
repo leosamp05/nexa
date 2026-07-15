@@ -6,7 +6,18 @@ const AUDIO_QUALITY = ["low", "standard", "high"] as const;
 const VIDEO_QUALITY = ["p720", "p1080"] as const;
 
 export const MEDIA_OUTPUTS = ["mp3", "aac", "ogg", "wav", "mp4", "webm", "mkv"] as const;
+export const AUDIO_OUTPUTS = ["mp3", "aac", "ogg", "wav"] as const;
+export const VIDEO_OUTPUTS = ["mp4", "webm", "mkv"] as const;
 export const DOCUMENT_OUTPUTS = ["pdf", "docx", "txt"] as const;
+
+export function isAudioOnlySourceUrl(rawUrl: string) {
+  try {
+    const host = new URL(rawUrl).hostname.toLowerCase();
+    return host === "soundcloud.com" || host.endsWith(".soundcloud.com") || host === "bandcamp.com" || host.endsWith(".bandcamp.com");
+  } catch {
+    return false;
+  }
+}
 
 const DOCUMENT_MIME_PREFIXES = ["text/"] as const;
 const DOCUMENT_MIME_EXACT = [
@@ -23,6 +34,14 @@ export const createUrlJobSchema = z.object({
   audioQuality: z.enum(AUDIO_QUALITY).default("standard"),
   videoQuality: z.enum(VIDEO_QUALITY).default("p720"),
   captchaToken: z.string().nullable().optional(),
+}).superRefine((value, context) => {
+  if (isAudioOnlySourceUrl(value.url) && VIDEO_OUTPUTS.includes(value.outputFormat as (typeof VIDEO_OUTPUTS)[number])) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["outputFormat"],
+      message: "This service supports audio outputs only.",
+    });
+  }
 });
 
 export const createUploadJobSchema = z.object({
@@ -47,7 +66,13 @@ export function inferMimeFromFilename(filename: string): string {
   if (lower.endsWith(".aac")) return "audio/aac";
   if (lower.endsWith(".ogg")) return "audio/ogg";
   if (lower.endsWith(".wav")) return "audio/wav";
+  if (lower.endsWith(".flac")) return "audio/flac";
+  if (lower.endsWith(".m4a") || lower.endsWith(".m4b")) return "audio/mp4";
+  if (lower.endsWith(".weba")) return "audio/webm";
   if (lower.endsWith(".mp4")) return "video/mp4";
+  if (lower.endsWith(".mov")) return "video/quicktime";
+  if (lower.endsWith(".avi")) return "video/x-msvideo";
+  if (lower.endsWith(".ogv")) return "video/ogg";
   if (lower.endsWith(".webm")) return "video/webm";
   if (lower.endsWith(".mkv")) return "video/x-matroska";
   if (lower.endsWith(".pdf")) return "application/pdf";
@@ -72,15 +97,14 @@ export function isUploadConversionSupported(inputMimeType: string, outputFormat:
     if (!isMediaInputMime(mime)) {
       return { ok: false, reason: "Conversion not possible: audio/video output requires an audio or video input file." };
     }
+    if (VIDEO_OUTPUTS.includes(outputFormat as (typeof VIDEO_OUTPUTS)[number]) && !mime.startsWith("video/")) {
+      return { ok: false, reason: "Conversion not possible: video output requires a video input file." };
+    }
     return { ok: true };
   }
 
   if (!isDocumentInputMime(mime)) {
     return { ok: false, reason: "Conversion not possible: document output requires a text/document input file." };
-  }
-
-  if (mime === "application/pdf" && (outputFormat === "txt" || outputFormat === "docx")) {
-    return { ok: false, reason: "Conversion not possible: PDF to TXT/DOCX is not supported." };
   }
 
   return { ok: true };

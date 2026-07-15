@@ -1,4 +1,15 @@
 import net from "node:net";
+import { createHash, timingSafeEqual } from "node:crypto";
+
+const MIN_PROXY_TOKEN_LENGTH = 32;
+
+function proxyTokenMatches(received: string | null | undefined, expected: string | undefined) {
+  if (!received || !expected || expected.length < MIN_PROXY_TOKEN_LENGTH) return false;
+
+  const receivedDigest = createHash("sha256").update(received).digest();
+  const expectedDigest = createHash("sha256").update(expected).digest();
+  return timingSafeEqual(receivedDigest, expectedDigest);
+}
 
 function normalizeMappedIpv4(raw: string) {
   if (raw.startsWith("::ffff:")) return raw.slice(7);
@@ -80,9 +91,16 @@ export function extractClientIpFromHeaderValues(values: {
   forwarded?: string | null;
   cfConnectingIp?: string | null;
   realIp?: string | null;
-}) {
-  const forwarded = values.forwarded?.split(",")[0].trim();
-  const candidate = forwarded || values.cfConnectingIp || values.realIp || "unknown";
+  proxyToken?: string | null;
+}, expectedProxyToken = process.env.TRUSTED_PROXY_TOKEN) {
+  // Next.js does not expose the peer socket address to route handlers. Only a
+  // reverse proxy that knows the shared token may supply client-IP headers;
+  // direct requests use one stable, non-spoofable bucket instead.
+  if (!proxyTokenMatches(values.proxyToken, expectedProxyToken)) return "direct";
+
+  const forwardedValues = values.forwarded?.split(",").map((value) => value.trim()).filter(Boolean);
+  const forwarded = forwardedValues?.at(-1);
+  const candidate = forwarded || values.cfConnectingIp || values.realIp || "direct";
   return normalizeIpToken(candidate);
 }
 

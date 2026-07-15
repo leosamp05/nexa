@@ -1,7 +1,8 @@
 "use client";
 
-import { ChangeEvent, DragEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { inferMimeFromFilename, isUploadConversionSupported } from "@/lib/jobs";
+import Script from "next/script";
+import { ChangeEvent, DragEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { inferMimeFromFilename, isAudioOnlySourceUrl, isUploadConversionSupported } from "@/lib/jobs";
 import type { SerializedJob } from "@/lib/serialize";
 
 type Props = {
@@ -10,7 +11,18 @@ type Props = {
   initialJobs: SerializedJob[];
   captchaEnabled: boolean;
   captchaSiteKey: string;
+  maxUploadBytes: number;
 };
+
+declare global {
+  interface Window {
+    turnstile?: {
+      render: (container: HTMLElement, options: Record<string, unknown>) => string;
+      reset: (widgetId: string) => void;
+      remove: (widgetId: string) => void;
+    };
+  }
+}
 
 type SourceMode = "url" | "file";
 type UrlMediaMode = "audio" | "video";
@@ -27,6 +39,44 @@ const SUPPORTED_URL_SERVICES: { id: SupportedServiceId; label: string }[] = [
   { id: "vimeo", label: "Vimeo" },
   { id: "bandcamp", label: "Bandcamp" },
 ];
+
+function TurnstileWidget({ siteKey, resetKey, onToken }: { siteKey: string; resetKey: number; onToken: (token: string) => void }) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const widgetRef = useRef<string | null>(null);
+
+  const renderWidget = useCallback(() => {
+    if (!containerRef.current || !window.turnstile || widgetRef.current) return;
+    widgetRef.current = window.turnstile.render(containerRef.current, {
+      sitekey: siteKey,
+      theme: "dark",
+      callback: (token: string) => onToken(token),
+      "expired-callback": () => onToken(""),
+      "error-callback": () => onToken(""),
+    });
+  }, [onToken, siteKey]);
+
+  useEffect(() => {
+    renderWidget();
+    return () => {
+      if (widgetRef.current && window.turnstile) window.turnstile.remove(widgetRef.current);
+      widgetRef.current = null;
+    };
+  }, [renderWidget]);
+
+  useEffect(() => {
+    if (widgetRef.current && window.turnstile) {
+      window.turnstile.reset(widgetRef.current);
+      onToken("");
+    }
+  }, [onToken, resetKey]);
+
+  return (
+    <>
+      <Script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" strategy="afterInteractive" onLoad={renderWidget} />
+      <div ref={containerRef} className="captcha-widget" aria-label="Security verification" />
+    </>
+  );
+}
 
 function ServiceIcon({ service }: { service: SupportedServiceId }) {
   if (service === "youtube") {
@@ -95,15 +145,26 @@ function statusLabel(job: SerializedJob) {
   return job.status;
 }
 
-export function DashboardClient({ clientIp, authRequired, initialJobs, captchaEnabled, captchaSiteKey }: Props) {
+function formatUtcDateTime(value: string) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return value;
+  return `${date.toISOString().slice(0, 10)} ${date.toISOString().slice(11, 19)} UTC`;
+}
+
+export function DashboardClient({ clientIp, authRequired, initialJobs, captchaEnabled, captchaSiteKey, maxUploadBytes }: Props) {
   const [jobs, setJobs] = useState(initialJobs);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loadingUrl, setLoadingUrl] = useState(false);
   const [loadingUpload, setLoadingUpload] = useState(false);
+  const [logoutPending, setLogoutPending] = useState(false);
+  const [pendingJobs, setPendingJobs] = useState<Set<string>>(() => new Set());
+  const [captchaResetKey, setCaptchaResetKey] = useState(0);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isDragActive, setIsDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const refreshSequenceRef = useRef(0);
+  const [clientReady, setClientReady] = useState(false);
 
   const [activeSource, setActiveSource] = useState<SourceMode>("url");
   const [urlMedia, setUrlMedia] = useState<UrlMediaMode>("audio");
@@ -142,6 +203,17 @@ export function DashboardClient({ clientIp, authRequired, initialJobs, captchaEn
     fileMedia === "other"
       ? ".pdf,.doc,.docx,.txt,.rtf,.odt,text/plain,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/rtf,application/vnd.oasis.opendocument.text"
       : "audio/*,video/*";
+  const captchaConfigured = !captchaEnabled || captchaSiteKey.trim().length > 0;
+  const maxUploadLabel = `${Math.round(maxUploadBytes / (1024 * 1024))} MB`;
+  const urlIsAudioOnly = useMemo(() => isAudioOnlySourceUrl(urlForm.url), [urlForm.url]);
+
+  const handleCaptchaToken = useCallback((captchaToken: string) => {
+    setUrlForm((prev) => ({ ...prev, captchaToken }));
+  }, []);
+
+  useEffect(() => {
+    setClientReady(true);
+  }, []);
 
   useEffect(() => {
     setUrlForm((prev) => ({
@@ -151,6 +223,10 @@ export function DashboardClient({ clientIp, authRequired, initialJobs, captchaEn
   }, [urlMedia]);
 
   useEffect(() => {
+    if (urlIsAudioOnly && urlMedia !== "audio") setUrlMedia("audio");
+  }, [urlIsAudioOnly, urlMedia]);
+
+  useEffect(() => {
     setUploadForm((prev) => ({
       ...prev,
       outputFormat: isOutputCompatible(prev.outputFormat, fileMedia) ? prev.outputFormat : outputFallback(fileMedia),
@@ -158,10 +234,11 @@ export function DashboardClient({ clientIp, authRequired, initialJobs, captchaEn
   }, [fileMedia]);
 
   async function refreshJobs() {
+    const sequence = ++refreshSequenceRef.current;
     const response = await fetch("/api/jobs", { cache: "no-store" });
     if (!response.ok) return;
     const payload = (await response.json()) as { jobs: SerializedJob[] };
-    setJobs(payload.jobs);
+    if (sequence === refreshSequenceRef.current) setJobs(payload.jobs);
   }
 
   useEffect(() => {
@@ -203,11 +280,25 @@ export function DashboardClient({ clientIp, authRequired, initialJobs, captchaEn
     pickFile(file);
   }
 
+  function upsertJob(job: SerializedJob) {
+    setJobs((current) => [job, ...current.filter((item) => item.id !== job.id)]);
+  }
+
+  function setJobPending(jobId: string, pending: boolean) {
+    setPendingJobs((current) => {
+      const next = new Set(current);
+      if (pending) next.add(jobId);
+      else next.delete(jobId);
+      return next;
+    });
+  }
+
   async function submitUrl(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setMessage(null);
     setError(null);
     setLoadingUrl(true);
+    const submittedUrl = urlForm.url;
 
     try {
       const response = await fetch("/api/jobs/url", {
@@ -222,15 +313,22 @@ export function DashboardClient({ clientIp, authRequired, initialJobs, captchaEn
         }),
       });
 
-      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+      const payload = (await response.json().catch(() => null)) as { error?: string; job?: SerializedJob } | null;
       if (!response.ok) throw new Error(payload?.error ?? "Submit URL failed");
+      if (!payload?.job) throw new Error("The server did not return the queued job.");
 
       setMessage("Job added to queue.");
-      setUrlForm((prev) => ({ ...prev, url: "", captchaToken: "" }));
-      await refreshJobs();
+      upsertJob(payload.job);
+      setUrlForm((prev) => ({
+        ...prev,
+        url: prev.url === submittedUrl ? "" : prev.url,
+        captchaToken: "",
+      }));
+      void refreshJobs().catch(() => undefined);
     } catch (err) {
       setError((err as Error).message);
     } finally {
+      if (captchaEnabled) setCaptchaResetKey((value) => value + 1);
       setLoadingUrl(false);
     }
   }
@@ -246,6 +344,12 @@ export function DashboardClient({ clientIp, authRequired, initialJobs, captchaEn
 
     if (!file) {
       setError("Select a file");
+      setLoadingUpload(false);
+      return;
+    }
+
+    if (file.size > maxUploadBytes) {
+      setError(`File exceeds the ${maxUploadLabel} limit.`);
       setLoadingUpload(false);
       return;
     }
@@ -276,16 +380,18 @@ export function DashboardClient({ clientIp, authRequired, initialJobs, captchaEn
         body: data,
       });
 
-      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+      const payload = (await response.json().catch(() => null)) as { error?: string; job?: SerializedJob } | null;
       if (!response.ok) throw new Error(payload?.error ?? "Upload failed");
+      if (!payload?.job) throw new Error("The server did not return the queued job.");
 
       setMessage("Job added to queue.");
-      form.reset();
-      setSelectedFile(null);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = "";
+      upsertJob(payload.job);
+      if (selectedFile === file) {
+        form.reset();
+        setSelectedFile(null);
+        if (fileInputRef.current) fileInputRef.current.value = "";
       }
-      await refreshJobs();
+      void refreshJobs().catch(() => undefined);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -294,36 +400,61 @@ export function DashboardClient({ clientIp, authRequired, initialJobs, captchaEn
   }
 
   async function cancelJob(jobId: string) {
+    if (pendingJobs.has(jobId)) return;
     setError(null);
-    const response = await fetch(`/api/jobs/${jobId}/cancel`, { method: "POST" });
-    if (!response.ok) {
-      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
-      setError(payload?.error ?? "Cancel failed");
-      return;
+    setJobPending(jobId, true);
+    try {
+      const response = await fetch(`/api/jobs/${jobId}/cancel`, { method: "POST" });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error ?? "Cancel failed");
+      }
+      setJobs((current) => current.map((job) => job.id === jobId
+        ? { ...job, status: "canceled", errorMessage: "Canceled by user", canceledAt: new Date().toISOString() }
+        : job));
+      setMessage("Job canceled.");
+      void refreshJobs().catch(() => undefined);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setJobPending(jobId, false);
     }
-    await refreshJobs();
   }
 
   async function deleteJob(jobId: string) {
+    if (pendingJobs.has(jobId)) return;
     setError(null);
-    const response = await fetch(`/api/jobs/${jobId}`, { method: "DELETE" });
-    if (!response.ok) {
-      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
-      setError(payload?.error ?? "Delete failed");
-      return;
+    setJobPending(jobId, true);
+    try {
+      const response = await fetch(`/api/jobs/${jobId}`, { method: "DELETE" });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error ?? "Delete failed");
+      }
+      setJobs((current) => current.filter((job) => job.id !== jobId));
+      setMessage("Job deleted.");
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setJobPending(jobId, false);
     }
-    await refreshJobs();
   }
 
   async function logout() {
+    if (logoutPending) return;
     setError(null);
-    const response = await fetch("/api/auth/logout", { method: "POST" });
-    if (!response.ok) {
-      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
-      setError(payload?.error ?? "Logout failed");
-      return;
+    setLogoutPending(true);
+    try {
+      const response = await fetch("/api/auth/logout", { method: "POST" });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error ?? "Logout failed");
+      }
+      window.location.href = "/login";
+    } catch (err) {
+      setError((err as Error).message);
+      setLogoutPending(false);
     }
-    window.location.href = "/login";
   }
 
   return (
@@ -349,8 +480,8 @@ export function DashboardClient({ clientIp, authRequired, initialJobs, captchaEn
           <div className="app-header-right">
             <p className="small app-meta-top">Device IP: {clientIp} · Active jobs: {activeCount}</p>
             {authRequired ? (
-              <button type="button" className="secondary button-fixed" onClick={() => logout()}>
-                Sign out
+              <button type="button" className="secondary button-fixed" onClick={() => logout()} disabled={logoutPending}>
+                {logoutPending ? "Signing out…" : "Sign out"}
               </button>
             ) : null}
           </div>
@@ -402,6 +533,8 @@ export function DashboardClient({ clientIp, authRequired, initialJobs, captchaEn
               type="button"
               role="tab"
               aria-selected={activeMedia === "video"}
+              aria-disabled={activeSource === "url" && urlIsAudioOnly}
+              disabled={activeSource === "url" && urlIsAudioOnly}
               className={`media-switch-tab ${activeMedia === "video" ? "active" : ""}`}
               onClick={() => (activeSource === "url" ? setUrlMedia("video") : setFileMedia("video"))}
             >
@@ -436,6 +569,7 @@ export function DashboardClient({ clientIp, authRequired, initialJobs, captchaEn
                 autoCorrect="off"
                 spellCheck={false}
                 inputMode="url"
+                disabled={loadingUrl}
                 onChange={(e) => setUrlForm((prev) => ({ ...prev, url: e.target.value }))}
                 required
               />
@@ -456,8 +590,8 @@ export function DashboardClient({ clientIp, authRequired, initialJobs, captchaEn
 
             <div className="grid grid-2">
               <div className="grid field-stack">
-                <label>Output format</label>
-                <select value={urlForm.outputFormat} onChange={(e) => setUrlForm((prev) => ({ ...prev, outputFormat: e.target.value }))}>
+                <label htmlFor="url-output-format">Output format</label>
+                <select id="url-output-format" value={urlForm.outputFormat} disabled={loadingUrl} onChange={(e) => setUrlForm((prev) => ({ ...prev, outputFormat: e.target.value }))}>
                   {outputOptions.map((option) => (
                     <option key={option} value={option}>{option}</option>
                   ))}
@@ -466,8 +600,8 @@ export function DashboardClient({ clientIp, authRequired, initialJobs, captchaEn
 
               {urlMedia === "audio" ? (
                 <div className="grid field-stack">
-                  <label>Audio quality</label>
-                  <select value={urlForm.audioQuality} onChange={(e) => setUrlForm((prev) => ({ ...prev, audioQuality: e.target.value }))}>
+                  <label htmlFor="url-audio-quality">Audio quality</label>
+                  <select id="url-audio-quality" value={urlForm.audioQuality} disabled={loadingUrl} onChange={(e) => setUrlForm((prev) => ({ ...prev, audioQuality: e.target.value }))}>
                     <option value="low">low</option>
                     <option value="standard">standard</option>
                     <option value="high">high</option>
@@ -475,8 +609,8 @@ export function DashboardClient({ clientIp, authRequired, initialJobs, captchaEn
                 </div>
               ) : (
                 <div className="grid field-stack">
-                  <label>Video preset</label>
-                  <select value={urlForm.videoQuality} onChange={(e) => setUrlForm((prev) => ({ ...prev, videoQuality: e.target.value }))}>
+                  <label htmlFor="url-video-quality">Video preset</label>
+                  <select id="url-video-quality" value={urlForm.videoQuality} disabled={loadingUrl} onChange={(e) => setUrlForm((prev) => ({ ...prev, videoQuality: e.target.value }))}>
                     <option value="p720">720p</option>
                     <option value="p1080">1080p</option>
                   </select>
@@ -486,19 +620,17 @@ export function DashboardClient({ clientIp, authRequired, initialJobs, captchaEn
 
             {captchaEnabled ? (
               <div className="grid field-stack">
-                <label>Captcha token</label>
-                <input
-                  type="text"
-                  value={urlForm.captchaToken}
-                  onChange={(e) => setUrlForm((prev) => ({ ...prev, captchaToken: e.target.value }))}
-                  placeholder={captchaSiteKey ? `Token (${captchaSiteKey.slice(0, 8)}...)` : "Enter token"}
-                  required
-                />
+                <span className="field-label">Security verification</span>
+                {captchaConfigured ? (
+                  <TurnstileWidget siteKey={captchaSiteKey} resetKey={captchaResetKey} onToken={handleCaptchaToken} />
+                ) : (
+                  <p className="small feedback error" role="alert">CAPTCHA is enabled, but its public site key is missing.</p>
+                )}
               </div>
             ) : null}
 
-              <button type="submit" disabled={loadingUrl}>
-                {loadingUrl ? "Converting..." : "Convert"}
+              <button type="submit" disabled={loadingUrl || !captchaConfigured || (captchaEnabled && !urlForm.captchaToken)}>
+                {loadingUrl ? "Adding to queue…" : "Convert"}
               </button>
             </form>
           </div>
@@ -514,11 +646,13 @@ export function DashboardClient({ clientIp, authRequired, initialJobs, captchaEn
                 ref={fileInputRef}
                 onChange={onFileInputChange}
                 accept={fileAccept}
+                disabled={loadingUpload}
                 className="hidden-input"
               />
               <button
                 type="button"
                 className={`dropzone ${isDragActive ? "active" : ""}`}
+                disabled={loadingUpload}
                 onClick={() => fileInputRef.current?.click()}
                 onDragOver={onDragOver}
                 onDragLeave={onDragLeave}
@@ -548,15 +682,15 @@ export function DashboardClient({ clientIp, authRequired, initialJobs, captchaEn
                   {selectedFile ? selectedFile.name : "Drag and drop a file here or click to select"}
                 </span>
                 <span className="dropzone-subtitle">
-                  {selectedFile ? "To add another file, drag it here or click to select." : "No file selected"}
+                  {selectedFile ? `${(selectedFile.size / (1024 * 1024)).toFixed(1)} MB · limit ${maxUploadLabel}` : `No file selected · max ${maxUploadLabel}`}
                 </span>
               </button>
             </div>
 
             <div className="grid grid-2">
               <div className="grid field-stack">
-                <label>Output format</label>
-                <select value={uploadForm.outputFormat} onChange={(e) => setUploadForm((prev) => ({ ...prev, outputFormat: e.target.value }))}>
+                <label htmlFor="file-output-format">Output format</label>
+                <select id="file-output-format" value={uploadForm.outputFormat} disabled={loadingUpload} onChange={(e) => setUploadForm((prev) => ({ ...prev, outputFormat: e.target.value }))}>
                   {outputOptions.map((option) => (
                     <option key={option} value={option}>{option}</option>
                   ))}
@@ -565,8 +699,8 @@ export function DashboardClient({ clientIp, authRequired, initialJobs, captchaEn
 
               {fileMedia === "audio" ? (
                 <div className="grid field-stack">
-                  <label>Audio quality</label>
-                  <select value={uploadForm.audioQuality} onChange={(e) => setUploadForm((prev) => ({ ...prev, audioQuality: e.target.value }))}>
+                  <label htmlFor="file-audio-quality">Audio quality</label>
+                  <select id="file-audio-quality" value={uploadForm.audioQuality} disabled={loadingUpload} onChange={(e) => setUploadForm((prev) => ({ ...prev, audioQuality: e.target.value }))}>
                     <option value="low">low</option>
                     <option value="standard">standard</option>
                     <option value="high">high</option>
@@ -574,29 +708,29 @@ export function DashboardClient({ clientIp, authRequired, initialJobs, captchaEn
                 </div>
               ) : fileMedia === "video" ? (
                 <div className="grid field-stack">
-                  <label>Video preset</label>
-                  <select value={uploadForm.videoQuality} onChange={(e) => setUploadForm((prev) => ({ ...prev, videoQuality: e.target.value }))}>
+                  <label htmlFor="file-video-quality">Video preset</label>
+                  <select id="file-video-quality" value={uploadForm.videoQuality} disabled={loadingUpload} onChange={(e) => setUploadForm((prev) => ({ ...prev, videoQuality: e.target.value }))}>
                     <option value="p720">720p</option>
                     <option value="p1080">1080p</option>
                   </select>
                 </div>
               ) : (
                 <div className="grid field-stack">
-                  <label>Mode</label>
-                  <input value="Document and text conversion" disabled readOnly />
+                  <label htmlFor="file-document-mode">Mode</label>
+                  <input id="file-document-mode" value="Document and text conversion" disabled readOnly />
                 </div>
               )}
             </div>
 
               <button type="submit" disabled={loadingUpload}>
-                {loadingUpload ? "Converting..." : "Convert"}
+                {loadingUpload ? "Uploading…" : "Convert"}
               </button>
             </form>
           </div>
         )}
       </section>
 
-      {error ? <p className="small feedback error">{error}</p> : null}
+      {error ? <p className="small feedback error" role="alert" aria-live="assertive">{error}</p> : null}
 
       <section className="panel">
         <div className="row jobs-header">
@@ -620,29 +754,38 @@ export function DashboardClient({ clientIp, authRequired, initialJobs, captchaEn
               {jobs.map((job) => {
                 const canDownload = job.status === "done";
                 const canCancel = job.status === "queued" || job.status === "processing";
+                const actionPending = pendingJobs.has(job.id);
 
                 return (
                   <tr key={job.id} className="job-row">
-                    <td>{job.id.slice(0, 10)}...</td>
-                    <td>
+                    <td data-label="ID">{job.id.slice(0, 10)}...</td>
+                    <td data-label="Source">
                       <div>{job.sourceType}</div>
                       {job.sourceUrl ? <div className="small url-preview">{job.sourceUrl}</div> : null}
                     </td>
-                    <td>{job.outputFormat}</td>
-                    <td><span className={`badge ${job.status}`}>{statusLabel(job)}</span></td>
-                    <td>{new Date(job.createdAt).toLocaleString()}</td>
-                    <td className="small">{job.errorMessage ?? "-"}</td>
-                    <td>
+                    <td data-label="Output">{job.outputFormat}</td>
+                    <td data-label="Status"><span className={`badge ${job.status}`}>{statusLabel(job)}</span></td>
+                    <td data-label="Created">
+                      <time dateTime={job.createdAt}>
+                        {clientReady ? new Date(job.createdAt).toLocaleString() : formatUtcDateTime(job.createdAt)}
+                      </time>
+                    </td>
+                    <td data-label="Error" className="small">{job.errorMessage ?? "-"}</td>
+                    <td data-label="Actions">
                       <div className="row action-row">
                         {canDownload ? (
-                          <a href={`/api/jobs/${job.id}/download`} className="action-link">
-                            <button type="button" className="secondary button-fixed">Download</button>
-                          </a>
+                          <a href={`/api/jobs/${job.id}/download`} className="action-button secondary button-fixed" aria-label={`Download job ${job.id}`}>Download</a>
                         ) : null}
                         {canCancel ? (
-                          <button type="button" className="secondary button-fixed" onClick={() => cancelJob(job.id)}>Cancel</button>
+                          <button type="button" className="secondary button-fixed" disabled={actionPending} aria-label={`Cancel job ${job.id}`} onClick={() => cancelJob(job.id)}>
+                            {actionPending ? "Canceling…" : "Cancel"}
+                          </button>
                         ) : null}
-                        <button type="button" className="danger button-fixed" onClick={() => deleteJob(job.id)}>Delete</button>
+                        {!canCancel ? (
+                          <button type="button" className="danger button-fixed" disabled={actionPending} aria-label={`Delete job ${job.id}`} onClick={() => deleteJob(job.id)}>
+                            {actionPending ? "Deleting…" : "Delete"}
+                          </button>
+                        ) : null}
                       </div>
                     </td>
                   </tr>

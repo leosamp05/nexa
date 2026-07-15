@@ -25,7 +25,8 @@ export async function sha256Buffer(buffer: Buffer) {
 export function resolveInsideDataDir(targetPath: string) {
   const resolved = path.resolve(targetPath);
   const root = path.resolve(appConfig.dataDir);
-  if (!resolved.startsWith(root)) {
+  const relative = path.relative(root, resolved);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
     throw new Error("Path traversal rejected");
   }
   return resolved;
@@ -47,4 +48,9 @@ export async function removeDirectoryIfEmpty(dirPath: string) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code !== "ENOENT" && code !== "ENOTEMPTY") throw error;
   }
+}
+
+export async function removeJobDirectory(jobId: string) {
+  const dir = resolveInsideDataDir(jobDirPath(jobId));
+  await fs.rm(dir, { recursive: true, force: true });
 }

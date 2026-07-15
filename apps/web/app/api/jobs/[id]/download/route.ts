@@ -1,21 +1,23 @@
-import fs from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { Readable } from "node:stream";
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { jsonError } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
 import { resolveInsideDataDir } from "@/lib/storage";
 
-type Context = { params: { id: string } };
+type Context = { params: Promise<{ id: string }> };
 
 export const runtime = "nodejs";
 
 export async function GET(_request: NextRequest, context: Context) {
   const user = await getCurrentUser();
   if (!user) return jsonError(401, "Unauthorized");
+  const { id } = await context.params;
 
   const dbJob = await prisma.job.findFirst({
     where: {
-      id: context.params.id,
+      id,
       userId: user.id,
     },
     include: { files: true },
@@ -28,7 +30,7 @@ export async function GET(_request: NextRequest, context: Context) {
   const output = dbJob.files.find((file) => file.kind === "output");
   if (!output) return jsonError(404, "Output not found");
 
-  const buffer = await fs.readFile(resolveInsideDataDir(output.path));
+  const stream = Readable.toWeb(createReadStream(resolveInsideDataDir(output.path)));
 
   await prisma.auditEvent.create({
     data: {
@@ -41,7 +43,7 @@ export async function GET(_request: NextRequest, context: Context) {
     },
   });
 
-  return new NextResponse(buffer, {
+  return new NextResponse(stream as ReadableStream, {
     status: 200,
     headers: {
       "Content-Type": output.mimeType,

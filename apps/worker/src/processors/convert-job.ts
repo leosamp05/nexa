@@ -1,15 +1,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import dns from "node:dns/promises";
 import net from "node:net";
 import { JobStatus, OutputFormat } from "@prisma/client";
+import { UnrecoverableError } from "bullmq";
 import { convertDocument, isDocumentOutput } from "../converters/document";
 import { convertMedia, isMediaOutput } from "../converters/media";
 import { runCommand } from "../lib/command";
 import { config } from "../lib/config";
-import { resolveInsideDataDir, sha256File, unlinkIfExists } from "../lib/files";
+import { removeJobDirectory, resolveInsideDataDir, sha256File, unlinkIfExists } from "../lib/files";
 import { logger } from "../lib/logger";
 import { prisma } from "../lib/prisma";
+import { startSafeEgressProxy } from "../lib/safe-egress-proxy";
 
 const AUDIO_OUTPUTS: OutputFormat[] = ["mp3", "aac", "ogg", "wav"];
 
@@ -23,10 +26,6 @@ function isYouTubeHost(host: string) {
 
 function isSoundCloudHost(host: string) {
   return host === "soundcloud.com" || host === "www.soundcloud.com" || host.endsWith(".soundcloud.com");
-}
-
-function isSoundCloudShortHost(host: string) {
-  return host === "on.soundcloud.com" || host.endsWith(".on.soundcloud.com");
 }
 
 function normalizeIp(raw: string) {
@@ -119,58 +118,6 @@ async function ensureHostResolvesToPublicIps(host: string) {
   }
 }
 
-async function resolveSoundCloudShortUrl(sourceUrl: string) {
-  const parsed = new URL(sourceUrl);
-  const host = parsed.hostname.toLowerCase();
-  if (!isSoundCloudShortHost(host)) return sourceUrl;
-
-  // Some SoundCloud short links do not redirect properly with fetch GET.
-  const tryFetchResolve = async (method: "HEAD" | "GET") => {
-    const response = await fetch(sourceUrl, {
-      method,
-      redirect: "follow",
-      headers: {
-        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-      },
-    });
-    return response.url || sourceUrl;
-  };
-
-  try {
-    const headResolved = await tryFetchResolve("HEAD");
-    if (headResolved !== sourceUrl) {
-      return headResolved;
-    }
-  } catch {
-    // Try next strategy.
-  }
-
-  try {
-    const getResolved = await tryFetchResolve("GET");
-    if (getResolved !== sourceUrl) {
-      return getResolved;
-    }
-  } catch {
-    // Try curl fallback.
-  }
-
-  try {
-    const effectiveUrl = (await runCommand(
-      "curl",
-      ["-sSIL", "--max-redirs", "5", "-o", "/dev/null", "-w", "%{url_effective}", sourceUrl],
-      { timeoutMs: 15000 },
-    )).trim();
-
-    if (effectiveUrl && effectiveUrl !== sourceUrl) {
-      return effectiveUrl;
-    }
-  } catch {
-    // Fall through to original URL; downstream handling will produce a clear error if needed.
-  }
-
-  return sourceUrl;
-}
-
 async function validateSourceHost(sourceUrl: string) {
   const parsed = new URL(sourceUrl);
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
@@ -238,13 +185,13 @@ function normalizeSourceUrl(sourceUrl: string) {
   return parsed.toString();
 }
 
-async function probeDuration(filePath: string) {
+async function probeDuration(filePath: string, signal?: AbortSignal) {
   const output = await runCommand("ffprobe", [
     "-v", "error",
     "-show_entries", "format=duration",
     "-of", "default=noprint_wrappers=1:nokey=1",
     filePath,
-  ], { timeoutMs: 60000 });
+  ], { timeoutMs: 60000, signal });
 
   const seconds = Number(output.trim());
   if (!Number.isFinite(seconds)) return null;
@@ -272,10 +219,10 @@ async function processUrlJob(params: {
   outputFormat: OutputFormat;
   audioQuality: "low" | "standard" | "high";
   videoQuality: "p720" | "p1080";
+  signal?: AbortSignal;
 }) {
-  const resolvedSourceUrl = await resolveSoundCloudShortUrl(params.sourceUrl);
-  const sourceHost = await validateSourceHost(resolvedSourceUrl);
-  const normalizedUrl = normalizeSourceUrl(resolvedSourceUrl);
+  const sourceHost = await validateSourceHost(params.sourceUrl);
+  const normalizedUrl = normalizeSourceUrl(params.sourceUrl);
   if (!isMediaOutput(params.outputFormat)) {
     throw new Error("URL jobs support only media outputs");
   }
@@ -283,7 +230,10 @@ async function processUrlJob(params: {
     throw new Error("SoundCloud links support audio outputs only.");
   }
 
+  const safeProxy = await startSafeEgressProxy({ signal: params.signal });
   const baseArgs = [
+    "--proxy",
+    safeProxy.url,
     "--no-playlist",
     "--playlist-items",
     "1",
@@ -295,6 +245,8 @@ async function processUrlJob(params: {
     "3",
     "--socket-timeout",
     "15",
+    "--max-filesize",
+    String(config.maxRemoteDownloadBytes),
     "--embed-metadata",
     "-o",
     path.join(params.outputDir, "%(title).180B.%(ext)s"),
@@ -307,39 +259,44 @@ async function processUrlJob(params: {
       : "bestvideo*+bestaudio/best";
 
   try {
-    const args = [...baseArgs, "--format", formatArg];
-    if (isYouTubeHost(sourceHost)) {
-      args.push("--extractor-args", "youtube:player_client=android,web");
-    }
-    args.push(normalizedUrl);
-    await runCommand("yt-dlp", args, { timeoutMs: config.jobTimeoutMs });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const lower = message.toLowerCase();
+    try {
+      const args = [...baseArgs, "--format", formatArg];
+      if (isYouTubeHost(sourceHost)) {
+        args.push("--extractor-args", "youtube:player_client=android,web");
+      }
+      args.push(normalizedUrl);
+      await runCommand("yt-dlp", args, { timeoutMs: config.jobTimeoutMs, signal: params.signal });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const lower = message.toLowerCase();
 
-    if (isSoundCloudHost(sourceHost) && lower.includes("requested format is not available")) {
-      await runCommand("yt-dlp", [...baseArgs, "--format", "bestaudio/best", normalizedUrl], {
-        timeoutMs: config.jobTimeoutMs,
-      });
-    } else if (message.includes("Precondition check failed") || message.includes("Signature extraction failed")) {
-      throw new Error(
-        "YouTube extraction failed (yt-dlp). Rebuild worker image to latest yt-dlp and retry."
-      );
-    } else if (isSoundCloudHost(sourceHost) && lower.includes("unable to download")) {
-      throw new Error("SoundCloud extraction failed. Verify the link is public and retry.");
-    } else {
-      throw error;
+      if (isSoundCloudHost(sourceHost) && lower.includes("requested format is not available")) {
+        await runCommand("yt-dlp", [...baseArgs, "--format", "bestaudio/best", normalizedUrl], {
+          timeoutMs: config.jobTimeoutMs,
+          signal: params.signal,
+        });
+      } else if (message.includes("Precondition check failed") || message.includes("Signature extraction failed")) {
+        throw new Error(
+          "YouTube extraction failed (yt-dlp). Rebuild worker image to latest yt-dlp and retry."
+        );
+      } else if (isSoundCloudHost(sourceHost) && lower.includes("unable to download")) {
+        throw new Error("SoundCloud extraction failed. Verify the link is public and retry.");
+      } else {
+        throw error;
+      }
     }
+  } finally {
+    await safeProxy.close();
   }
 
   const inputPath = await findSourceFile(params.outputDir);
   const sourceBaseName = toConvertedBaseName(path.parse(inputPath).name);
-  const duration = await probeDuration(inputPath);
+  const duration = await probeDuration(inputPath, params.signal);
   if (duration && duration > config.maxDurationSeconds) {
     throw new Error(`Source duration exceeds limit: ${config.maxDurationSeconds}s`);
   }
 
-  return convertMedia({
+  const converted = await convertMedia({
     inputPath,
     outputDir: params.outputDir,
     format: params.outputFormat,
@@ -347,7 +304,9 @@ async function processUrlJob(params: {
     videoQuality: params.videoQuality,
     outputBaseName: sourceBaseName,
     timeoutMs: config.jobTimeoutMs,
+    signal: params.signal,
   });
+  return { ...converted, sourcePath: inputPath };
 }
 
 async function processUploadJob(params: {
@@ -357,8 +316,13 @@ async function processUploadJob(params: {
   audioQuality: "low" | "standard" | "high";
   videoQuality: "p720" | "p1080";
   outputBaseName: string;
+  signal?: AbortSignal;
 }) {
   if (isMediaOutput(params.outputFormat)) {
+    const duration = await probeDuration(params.inputPath, params.signal);
+    if (duration && duration > config.maxDurationSeconds) {
+      throw new Error(`Source duration exceeds limit: ${config.maxDurationSeconds}s`);
+    }
     return convertMedia({
       inputPath: params.inputPath,
       outputDir: params.outputDir,
@@ -367,6 +331,7 @@ async function processUploadJob(params: {
       videoQuality: params.videoQuality,
       outputBaseName: params.outputBaseName,
       timeoutMs: config.jobTimeoutMs,
+      signal: params.signal,
     });
   }
 
@@ -377,6 +342,7 @@ async function processUploadJob(params: {
       format: params.outputFormat,
       outputBaseName: params.outputBaseName,
       timeoutMs: config.jobTimeoutMs,
+      signal: params.signal,
     });
   }
 
@@ -405,11 +371,35 @@ function normalizeFailureMessage(rawMessage: string) {
   return rawMessage.slice(0, 1200);
 }
 
-async function markFailed(jobId: string, userId: string, message: string) {
+function isRetryableFailure(error: unknown) {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  if (["EAI_AGAIN", "ETIMEOUT", "ETIMEDOUT", "ECONNRESET", "ECONNREFUSED", "ENETUNREACH", "EPIPE"].includes(code ?? "")) {
+    return true;
+  }
+
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  return [
+    "temporary dns",
+    "temporarily unavailable",
+    "connection reset",
+    "connection refused",
+    "network is unreachable",
+    "remote end closed connection",
+    "http error 429",
+    "http error 500",
+    "http error 502",
+    "http error 503",
+    "http error 504",
+    "service unavailable",
+    "too many requests",
+  ].some((marker) => message.includes(marker));
+}
+
+async function markFailed(jobId: string, userId: string, leaseStartedAt: Date, message: string) {
   const shortMessage = normalizeFailureMessage(message);
 
-  await prisma.job.update({
-    where: { id: jobId },
+  const changed = await prisma.job.updateMany({
+    where: { id: jobId, status: JobStatus.processing, startedAt: leaseStartedAt },
     data: {
       status: JobStatus.failed,
       errorMessage: shortMessage,
@@ -417,15 +407,45 @@ async function markFailed(jobId: string, userId: string, message: string) {
       lastErrorAt: new Date(),
     },
   });
+  if (changed.count !== 1) return false;
 
-  await prisma.auditEvent.create({
-    data: {
-      userId,
-      jobId,
-      eventType: "job.failed",
-      metadata: { message: shortMessage, rawMessage: message.slice(0, 5000) },
-    },
-  });
+  try {
+    await prisma.auditEvent.create({
+      data: {
+        userId,
+        jobId,
+        eventType: "job.failed",
+        metadata: { message: shortMessage, rawMessage: message.slice(0, 5000) },
+      },
+    });
+  } catch (error) {
+    logger.error({ error, jobId }, "Failed to persist job failure audit event");
+  }
+  return true;
+}
+
+function sameInstant(left: Date | null | undefined, right: Date) {
+  return left instanceof Date && left.getTime() === right.getTime();
+}
+
+function watchForCancellation(jobId: string, controller: AbortController) {
+  let checking = false;
+  const timer = setInterval(async () => {
+    if (checking || controller.signal.aborted) return;
+    checking = true;
+    try {
+      const current = await prisma.job.findUnique({ where: { id: jobId }, select: { status: true } });
+      if (current?.status === JobStatus.canceled || current?.status === JobStatus.expired) {
+        controller.abort(new Error("Job canceled"));
+      }
+    } catch (error) {
+      logger.warn({ error, jobId }, "Failed to poll job cancellation state");
+    } finally {
+      checking = false;
+    }
+  }, 500);
+  timer.unref?.();
+  return () => clearInterval(timer);
 }
 
 export async function processConversionJob(jobId: string, attemptContext?: { attempt: number; maxAttempts: number }) {
@@ -442,37 +462,49 @@ export async function processConversionJob(jobId: string, attemptContext?: { att
     return;
   }
 
-  if (dbJob.status === JobStatus.canceled) {
-    logger.info({ jobId }, "Skipping canceled job");
+  if (dbJob.status !== JobStatus.queued && dbJob.status !== JobStatus.processing) {
+    logger.info({ jobId, status: dbJob.status }, "Skipping job that is not queued");
     return;
   }
 
-  const jobDir = path.join(config.dataDir, "jobs", dbJob.id);
-  await fs.mkdir(jobDir, { recursive: true });
-
-  await prisma.job.update({
-    where: { id: dbJob.id },
+  const leaseStartedAt = new Date();
+  const claimWhere = dbJob.status === JobStatus.queued
+    ? { id: dbJob.id, status: JobStatus.queued }
+    : { id: dbJob.id, status: JobStatus.processing, startedAt: dbJob.startedAt ?? null };
+  const claimed = await prisma.job.updateMany({
+    where: claimWhere,
     data: {
       status: JobStatus.processing,
       attemptCount: attempt,
       maxAttempts,
-      startedAt: new Date(),
+      startedAt: leaseStartedAt,
       errorMessage: null,
     },
   });
+  if (claimed.count !== 1) {
+    logger.info({ jobId }, "Job claim lost to another state transition");
+    return;
+  }
+
+  const jobDir = path.join(config.dataDir, "jobs", dbJob.id);
+  const executionDir = path.join(jobDir, "runs", randomUUID());
+  const abortController = new AbortController();
+  const stopCancellationWatcher = watchForCancellation(dbJob.id, abortController);
 
   try {
-    let output: { outputPath: string; outputFilename: string; mimeType: string };
+    await fs.mkdir(executionDir, { recursive: true });
+    let output: { outputPath: string; outputFilename: string; mimeType: string; sourcePath?: string };
 
     if (dbJob.sourceType === "url") {
       if (!dbJob.sourceUrl) throw new Error("Missing source URL");
 
       output = await processUrlJob({
         sourceUrl: dbJob.sourceUrl,
-        outputDir: jobDir,
+        outputDir: executionDir,
         outputFormat: dbJob.outputFormat,
         audioQuality: dbJob.audioQuality,
         videoQuality: dbJob.videoQuality,
+        signal: abortController.signal,
       });
     } else {
       const input = dbJob.files.find((file) => file.kind === "input");
@@ -482,11 +514,12 @@ export async function processConversionJob(jobId: string, attemptContext?: { att
 
       output = await processUploadJob({
         inputPath: resolveInsideDataDir(input.path),
-        outputDir: jobDir,
+        outputDir: executionDir,
         outputFormat: dbJob.outputFormat,
         audioQuality: dbJob.audioQuality,
         videoQuality: dbJob.videoQuality,
         outputBaseName: uploadBaseName,
+        signal: abortController.signal,
       });
     }
 
@@ -494,9 +527,10 @@ export async function processConversionJob(jobId: string, attemptContext?: { att
     const stats = await fs.stat(safeOutputPath);
     const sha = await sha256File(safeOutputPath);
 
-    const current = await prisma.job.findUnique({ where: { id: dbJob.id }, select: { status: true } });
+    const current = await prisma.job.findUnique({ where: { id: dbJob.id }, select: { status: true, startedAt: true } });
     if (current?.status === JobStatus.canceled) {
-      await unlinkIfExists(safeOutputPath);
+      await removeJobDirectory(dbJob.id);
+      await prisma.fileArtifact.deleteMany({ where: { jobId: dbJob.id } });
       await prisma.auditEvent.create({
         data: {
           userId: dbJob.userId,
@@ -506,10 +540,23 @@ export async function processConversionJob(jobId: string, attemptContext?: { att
       });
       return;
     }
+    if (!sameInstant(current?.startedAt, leaseStartedAt)) {
+      await fs.rm(executionDir, { recursive: true, force: true });
+      logger.info({ jobId: dbJob.id }, "Discarding output from a superseded worker lease");
+      return;
+    }
 
-    await prisma.$transaction([
-      prisma.fileArtifact.deleteMany({ where: { jobId: dbJob.id, kind: "output" } }),
-      prisma.fileArtifact.create({
+    const completedAt = new Date();
+    const expiresAt = new Date(completedAt.getTime() + 24 * 60 * 60 * 1000);
+    const completed = await prisma.$transaction(async (tx) => {
+      const changed = await tx.job.updateMany({
+        where: { id: dbJob.id, status: JobStatus.processing, startedAt: leaseStartedAt },
+        data: { status: JobStatus.done, completedAt, expiresAt, errorMessage: null },
+      });
+      if (changed.count !== 1) return false;
+
+      await tx.fileArtifact.deleteMany({ where: { jobId: dbJob.id, kind: "output" } });
+      await tx.fileArtifact.create({
         data: {
           jobId: dbJob.id,
           kind: "output",
@@ -518,14 +565,10 @@ export async function processConversionJob(jobId: string, attemptContext?: { att
           mimeType: output.mimeType,
           sizeBytes: BigInt(stats.size),
           sha256: sha,
-          expiresAt: dbJob.expiresAt,
+          expiresAt,
         },
-      }),
-      prisma.job.update({
-        where: { id: dbJob.id },
-        data: { status: JobStatus.done, completedAt: new Date(), errorMessage: null },
-      }),
-      prisma.auditEvent.create({
+      });
+      await tx.auditEvent.create({
         data: {
           userId: dbJob.userId,
           jobId: dbJob.id,
@@ -536,19 +579,54 @@ export async function processConversionJob(jobId: string, attemptContext?: { att
             outputSize: stats.size,
           },
         },
-      }),
-    ]);
+      });
+      return true;
+    });
+
+    if (!completed) {
+      const latest = await prisma.job.findUnique({ where: { id: dbJob.id }, select: { status: true } });
+      if (latest?.status === JobStatus.canceled || latest?.status === JobStatus.expired) {
+        await removeJobDirectory(dbJob.id);
+        await prisma.fileArtifact.deleteMany({ where: { jobId: dbJob.id } });
+      } else {
+        await fs.rm(executionDir, { recursive: true, force: true });
+      }
+      return;
+    }
+
+    if (output.sourcePath) {
+      await unlinkIfExists(resolveInsideDataDir(output.sourcePath));
+    }
 
     logger.info({ jobId: dbJob.id }, "Job completed");
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     logger.error({ error, jobId: dbJob.id }, "Job failed");
 
-    if (attempt < maxAttempts) {
+    const current = await prisma.job.findUnique({ where: { id: dbJob.id }, select: { status: true, startedAt: true } });
+    if (current?.status === JobStatus.canceled || current?.status === JobStatus.expired) {
+      await removeJobDirectory(dbJob.id);
+      await prisma.fileArtifact.deleteMany({ where: { jobId: dbJob.id } });
+      await prisma.auditEvent.create({
+        data: {
+          userId: dbJob.userId,
+          jobId: dbJob.id,
+          eventType: "job.canceled.during_processing",
+        },
+      });
+      return;
+    }
+    if (!sameInstant(current?.startedAt, leaseStartedAt)) {
+      await fs.rm(executionDir, { recursive: true, force: true });
+      logger.info({ jobId: dbJob.id }, "Ignoring failure from a superseded worker lease");
+      return;
+    }
+
+    if (attempt < maxAttempts && isRetryableFailure(error)) {
       const shortMessage = normalizeFailureMessage(message);
-      await prisma.$transaction([
-        prisma.job.update({
-          where: { id: dbJob.id },
+      const requeued = await prisma.$transaction(async (tx) => {
+        const changed = await tx.job.updateMany({
+          where: { id: dbJob.id, status: JobStatus.processing, startedAt: leaseStartedAt },
           data: {
             status: JobStatus.queued,
             startedAt: null,
@@ -556,8 +634,9 @@ export async function processConversionJob(jobId: string, attemptContext?: { att
             lastErrorAt: new Date(),
             errorMessage: `Retry ${attempt}/${maxAttempts}: ${shortMessage}`,
           },
-        }),
-        prisma.auditEvent.create({
+        });
+        if (changed.count !== 1) return false;
+        await tx.auditEvent.create({
           data: {
             userId: dbJob.userId,
             jobId: dbJob.id,
@@ -568,13 +647,21 @@ export async function processConversionJob(jobId: string, attemptContext?: { att
               message: shortMessage,
             },
           },
-        }),
-      ]);
+        });
+        return true;
+      });
+      if (!requeued) return;
+      await fs.rm(executionDir, { recursive: true, force: true });
       throw error;
     }
 
-    await markFailed(dbJob.id, dbJob.userId, message);
-    throw error;
+    const failed = await markFailed(dbJob.id, dbJob.userId, leaseStartedAt, message);
+    if (failed) {
+      await fs.rm(executionDir, { recursive: true, force: true });
+      throw new UnrecoverableError(message);
+    }
+  } finally {
+    stopCancellationWatcher();
   }
 }
 
@@ -582,21 +669,21 @@ export async function runCleanupSweep() {
   const now = new Date();
   const expired = await prisma.job.findMany({
     where: {
-      status: { not: JobStatus.expired },
+      status: { in: [JobStatus.done, JobStatus.failed, JobStatus.canceled] },
       expiresAt: { lte: now },
     },
-    include: { files: true },
     take: 200,
   });
 
   for (const job of expired) {
-    for (const file of job.files) {
-      await unlinkIfExists(resolveInsideDataDir(file.path));
-    }
+    await removeJobDirectory(job.id);
 
     await prisma.$transaction([
       prisma.fileArtifact.deleteMany({ where: { jobId: job.id } }),
-      prisma.job.update({ where: { id: job.id }, data: { status: JobStatus.expired } }),
+      prisma.job.updateMany({
+        where: { id: job.id, status: { in: [JobStatus.done, JobStatus.failed, JobStatus.canceled] } },
+        data: { status: JobStatus.expired },
+      }),
       prisma.auditEvent.create({
         data: {
           userId: job.userId,

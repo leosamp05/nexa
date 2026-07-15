@@ -1,6 +1,7 @@
 services:
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: convertitore
       POSTGRES_USER: postgres
@@ -15,7 +16,10 @@ services:
 
   redis:
     image: redis:7-alpine
-    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes:
+      - redisdata:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -23,6 +27,7 @@ services:
       retries: 10
 
   web:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: Dockerfile.web
@@ -34,6 +39,7 @@ services:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/convertitore?schema=public
       REDIS_URL: redis://redis:6379
       DATA_DIR: /app/storage
+      TRUSTED_PROXY_TOKEN: ${TRUSTED_PROXY_TOKEN:-unconfigured}
     volumes:
       - ./storage:/app/storage
     depends_on:
@@ -45,6 +51,7 @@ services:
       sh -c "npm run prisma:generate && npm run prisma:migrate && npm run seed && npm run start -w @convertitore/web"
 
   worker:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: Dockerfile.worker
@@ -54,7 +61,7 @@ services:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/convertitore?schema=public
       REDIS_URL: redis://redis:6379
       DATA_DIR: /app/storage
-      WORKER_CONCURRENCY: 2
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
     volumes:
       - ./storage:/app/storage
     depends_on:
@@ -67,11 +74,13 @@ services:
 
   caddy:
     image: caddy:2-alpine
+    restart: unless-stopped
     ports:
       - "80:80"
       - "443:443"
     environment:
       APP_DOMAIN: ${APP_DOMAIN:-localhost}
+      TRUSTED_PROXY_TOKEN: ${TRUSTED_PROXY_TOKEN:-unconfigured}
     volumes:
       - ./docker/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -81,5 +90,6 @@ services:
 
 volumes:
   pgdata:
+  redisdata:
   caddy_data:
   caddy_config:

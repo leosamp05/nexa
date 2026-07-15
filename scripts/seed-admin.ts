@@ -12,6 +12,10 @@ async function main() {
     return;
   }
 
+  if (password === "change-me-now" || password.length < 12) {
+    throw new Error("ADMIN_PASSWORD must be at least 12 characters and must not use the example default.");
+  }
+
   const passwordHash = await argon2.hash(password);
 
   await prisma.user.upsert({

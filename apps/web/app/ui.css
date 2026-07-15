@@ -78,6 +78,11 @@ label {
   color: var(--color-text-muted);
 }
 
+.field-label {
+  font-size: var(--font-size-label);
+  color: var(--color-text-muted);
+}
+
 input,
 select,
 button {
@@ -132,6 +137,15 @@ button {
 button:hover {
   transform: translateY(-1px);
   box-shadow: 0 8px 20px rgba(47, 108, 243, 0.36);
+}
+
+button:disabled,
+input:disabled,
+select:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+  transform: none;
+  box-shadow: none;
 }
 
 button.secondary {
@@ -397,7 +411,7 @@ button.danger:hover {
 }
 
 .media-switch.file-mode {
-  min-width: 300px;
+  min-width: min(300px, 100%);
 }
 
 .media-switch-tab {
@@ -553,9 +567,28 @@ button.danger:hover {
   align-items: flex-start;
 }
 
-.action-link {
+.action-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  padding: 0.72rem 0.9rem;
+  border-radius: var(--radius-input);
+  border: var(--border-input);
+  background: var(--color-panel-strong);
+  color: var(--color-text);
+  font-weight: 700;
   text-decoration: none;
   width: 92px;
+}
+
+.action-button:hover {
+  box-shadow: 0 8px 20px rgba(10, 17, 25, 0.48);
+  transform: translateY(-1px);
+}
+
+.captcha-widget {
+  min-height: 65px;
 }
 
 .url-preview {
@@ -629,6 +662,81 @@ td {
   }
 
   .app-header-right .button-fixed {
+    width: 100%;
+  }
+
+  .container {
+    width: min(100% - 1rem, 1120px);
+    padding-top: 0.5rem;
+  }
+
+  .panel {
+    padding: 1rem;
+  }
+
+  .media-switch-tab,
+  .source-tab {
+    min-width: 0;
+    white-space: normal;
+  }
+
+  .table-wrap {
+    overflow: visible;
+  }
+
+  table,
+  tbody,
+  tr,
+  td {
+    display: block;
+    width: 100%;
+  }
+
+  table {
+    min-width: 0;
+  }
+
+  thead {
+    display: none;
+  }
+
+  .job-row {
+    padding: 0.85rem;
+    margin-bottom: 0.75rem;
+    border: 1px solid rgba(133, 154, 177, 0.22);
+    border-radius: 12px;
+    background: rgba(8, 14, 22, 0.42);
+  }
+
+  .job-row td {
+    display: grid;
+    grid-template-columns: minmax(72px, 0.35fr) minmax(0, 1fr);
+    gap: 0.75rem;
+    align-items: start;
+    padding: 0.45rem 0;
+    border-bottom: 1px solid rgba(133, 154, 177, 0.1);
+    overflow-wrap: anywhere;
+  }
+
+  .job-row td::before {
+    content: attr(data-label);
+    color: var(--color-text-muted);
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .job-row td:last-child {
+    border-bottom: 0;
+  }
+
+  .action-row {
+    flex-wrap: wrap;
+  }
+
+  .action-row .button-fixed,
+  .action-row .action-button {
     width: 100%;
   }
 }

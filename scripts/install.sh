@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ENV_FILE="${ROOT_DIR}/.env"
+ENV_FILE="${NEXA_ENV_FILE:-${ROOT_DIR}/.env}"
 
 BLUE=$'\033[1;34m'
 RESET=$'\033[0m'
@@ -103,7 +103,25 @@ generate_secret() {
     return
   fi
 
-  date +%s | shasum | awk '{ print $1 }'
+  if [[ -r /dev/urandom ]] && command -v od >/dev/null 2>&1; then
+    od -An -N32 -tx1 /dev/urandom | tr -d ' \n'
+    return
+  fi
+
+  printf "Unable to generate a secret securely (install openssl or Node.js).\n" >&2
+  return 1
+}
+
+ensure_runtime_secrets() {
+  if [[ -f "$ENV_FILE" ]] && grep -Eq "^SESSION_SECRET=$|^SESSION_SECRET=replace-with-a-long-random-secret$" "$ENV_FILE"; then
+    set_env_var "SESSION_SECRET" "$(generate_secret)"
+  fi
+  set_env_if_missing "SESSION_SECRET" "$(generate_secret)"
+
+  if [[ -f "$ENV_FILE" ]] && grep -Eq "^TRUSTED_PROXY_TOKEN=$|^TRUSTED_PROXY_TOKEN=replace-with-a-separate-long-random-secret$" "$ENV_FILE"; then
+    set_env_var "TRUSTED_PROXY_TOKEN" "$(generate_secret)"
+  fi
+  set_env_if_missing "TRUSTED_PROXY_TOKEN" "$(generate_secret)"
 }
 
 detect_compose_cmd() {
@@ -127,6 +145,7 @@ run_cmd() {
 
 configure_common_env_defaults() {
   set_env_if_missing "MAX_UPLOAD_BYTES" "524288000"
+  set_env_if_missing "MAX_REMOTE_DOWNLOAD_BYTES" "524288000"
   set_env_if_missing "MAX_DURATION_SECONDS" "3600"
   set_env_if_missing "JOB_TIMEOUT_MS" "900000"
   set_env_if_missing "RATE_LIMIT_WINDOW_SEC" "60"
@@ -146,11 +165,14 @@ configure_common_env_defaults() {
   set_env_if_missing "LOG_LEVEL" "info"
   set_env_if_missing "SENTRY_DSN" ""
 
-  if [[ -f "$ENV_FILE" ]] && grep -q "^SESSION_SECRET=$" "$ENV_FILE"; then
-    set_env_var "SESSION_SECRET" "$(generate_secret)"
-  fi
-  set_env_if_missing "SESSION_SECRET" "$(generate_secret)"
+  ensure_runtime_secrets
 }
+
+if [[ "${1:-}" == "--ensure-secrets" ]]; then
+  ensure_runtime_secrets
+  printf "Runtime secrets are configured.\n"
+  exit 0
+fi
 
 print_title
 printf "Choose profile:\n"
@@ -243,7 +265,9 @@ if [[ "$INSTALL_MODE" == "docker" ]]; then
   fi
 
   docker_bind_ip="0.0.0.0"
-  if [[ "$APP_HOST" == "localhost" || "$APP_HOST" == "127.0.0.1" ]]; then
+  if [[ "$USE_CADDY" == "yes" ]]; then
+    docker_bind_ip="127.0.0.1"
+  elif [[ "$APP_HOST" == "localhost" || "$APP_HOST" == "127.0.0.1" ]]; then
     docker_bind_ip="127.0.0.1"
   fi
 
@@ -278,9 +302,11 @@ if [[ "$INSTALL_MODE" == "docker" ]]; then
   fi
 
   print_step "Installation completed"
-  printf "Open: http://%s:%s\n" "$APP_HOST" "$APP_PORT"
   if [[ "$USE_CADDY" == "yes" ]]; then
-    printf "Caddy active on: http://%s and https://%s\n" "$APP_HOST" "$APP_HOST"
+    printf "Open: https://%s\n" "$APP_HOST"
+    printf "Direct Next.js port remains local-only at 127.0.0.1:%s.\n" "$APP_PORT"
+  else
+    printf "Open: http://%s:%s\n" "$APP_HOST" "$APP_PORT"
   fi
   printf "Web logs:    docker compose logs -f web\n"
   printf "Worker logs: docker compose logs -f worker\n"
@@ -319,7 +345,7 @@ if command -v nc >/dev/null 2>&1; then
 fi
 
 print_step "Installing dependencies and preparing database"
-run_cmd npm install
+run_cmd npm ci --legacy-peer-deps
 run_cmd npm run prisma:generate
 run_cmd npm run prisma:migrate
 run_cmd npm run seed

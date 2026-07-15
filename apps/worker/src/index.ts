@@ -1,4 +1,4 @@
-import { Worker } from "bullmq";
+import { UnrecoverableError, Worker } from "bullmq";
 import type { ConnectionOptions } from "bullmq";
 import { config } from "./lib/config";
 import { logger } from "./lib/logger";
@@ -25,11 +25,11 @@ async function main() {
   );
 
   worker.on("ready", () => logger.info("Worker ready"));
-  worker.on("completed", (job) => logger.info({ queueJobId: job.id, attemptsMade: job.attemptsMade + 1 }, "Queue job completed"));
+  worker.on("completed", (job) => logger.info({ queueJobId: job.id, attemptsMade: job.attemptsMade }, "Queue job completed"));
   worker.on("failed", (job, error) => {
     const attempts = Number(job?.opts.attempts ?? config.queueAttempts);
-    const attemptsMade = (job?.attemptsMade ?? 0) + 1;
-    const willRetry = attemptsMade < attempts;
+    const attemptsMade = job?.attemptsMade ?? 0;
+    const willRetry = attemptsMade < attempts && !(error instanceof UnrecoverableError);
     logger.error({ queueJobId: job?.id, attemptsMade, attempts, willRetry, error }, "Queue job failed");
   });
   worker.on("stalled", (jobId) => logger.warn({ queueJobId: jobId }, "Queue job stalled"));

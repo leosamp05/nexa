@@ -4,17 +4,18 @@ import { jsonError } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
 import { removeQueuedJob } from "@/lib/queue";
 
-type Context = { params: { id: string } };
+type Context = { params: Promise<{ id: string }> };
 
 export const runtime = "nodejs";
 
 export async function POST(_request: NextRequest, context: Context) {
   const user = await getCurrentUser();
   if (!user) return jsonError(401, "Unauthorized");
+  const { id } = await context.params;
 
   const dbJob = await prisma.job.findFirst({
     where: {
-      id: context.params.id,
+      id,
       userId: user.id,
     },
   });
@@ -24,14 +25,19 @@ export async function POST(_request: NextRequest, context: Context) {
     return jsonError(409, "Job cannot be canceled");
   }
 
-  await prisma.job.update({
-    where: { id: dbJob.id },
+  const changed = await prisma.job.updateMany({
+    where: {
+      id: dbJob.id,
+      userId: user.id,
+      status: { in: ["queued", "processing"] },
+    },
     data: {
       status: "canceled",
       canceledAt: new Date(),
       errorMessage: "Canceled by user",
     },
   });
+  if (changed.count !== 1) return jsonError(409, "Job cannot be canceled");
 
   try {
     await removeQueuedJob(dbJob.id);

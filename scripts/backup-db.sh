@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 if [[ -z "${DATABASE_URL:-}" ]]; then
   echo "DATABASE_URL is required"
   exit 1
 fi
 
-mkdir -p /tmp/convertitore-backups
+BACKUP_DIR="${BACKUP_DIR:-/tmp/convertitore-backups}"
+install -d -m 700 "$BACKUP_DIR"
 TS=$(date +%Y%m%d-%H%M%S)
-OUT="/tmp/convertitore-backups/convertitore-${TS}.sql"
+OUT=$(mktemp "${BACKUP_DIR}/convertitore-${TS}-XXXXXX.sql")
 
-pg_dump "$DATABASE_URL" > "$OUT"
+export PGDATABASE="$DATABASE_URL"
+pg_dump > "$OUT"
 echo "Backup written to $OUT"

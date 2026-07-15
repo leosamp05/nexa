@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { jsonError } from "@/lib/http";
+import { jsonError, requireJsonRequest } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
 import { getClientIp, consumeRateLimit } from "@/lib/security";
 import { hashPassword, isAuthRequired, setSessionCookie } from "@/lib/auth";
@@ -17,15 +17,22 @@ export async function POST(request: NextRequest) {
     return jsonError(400, "Auth disabled");
   }
 
+  const requestError = requireJsonRequest(request);
+  if (requestError) return requestError;
+
   const ip = getClientIp(request);
-  const allowed = await consumeRateLimit(`rl:register:${ip}`, 8, 60);
-  if (!allowed) return jsonError(429, "Too many attempts");
+  const [ipAllowed, globalAllowed] = await Promise.all([
+    consumeRateLimit(`rl:register:ip:${ip}`, 8, 60),
+    consumeRateLimit("rl:register:global", 50, 60),
+  ]);
+  if (!ipAllowed || !globalAllowed) return jsonError(429, "Too many attempts");
 
   const payload = schema.safeParse(await request.json().catch(() => null));
   if (!payload.success) return jsonError(400, "Invalid payload");
+  const normalizedEmail = payload.data.email.trim().toLowerCase();
 
   const existing = await prisma.user.findUnique({
-    where: { email: payload.data.email },
+    where: { email: normalizedEmail },
     select: { id: true },
   });
 
@@ -35,7 +42,7 @@ export async function POST(request: NextRequest) {
         userId: existing.id,
         eventType: "auth.register.failed.exists",
         ip,
-        metadata: { email: payload.data.email },
+        metadata: { email: normalizedEmail },
       },
     });
     return jsonError(409, "Email already registered");
@@ -44,7 +51,7 @@ export async function POST(request: NextRequest) {
   const passwordHash = await hashPassword(payload.data.password);
   const user = await prisma.user.create({
     data: {
-      email: payload.data.email,
+      email: normalizedEmail,
       passwordHash,
     },
     select: {

@@ -22,7 +22,7 @@ const logo = Georama({
 
 export const metadata: Metadata = {
   title: "Nexa",
-  description: "Private VPN conversion hub",
+  description: "Private conversion hub for media, documents, and supported URLs.",
   icons: {
     icon: "/icon.svg",
     shortcut: "/icon.svg",

@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { AudioQuality, OutputFormat, VideoQuality } from "@prisma/client";
 import { runCommand } from "../lib/command";
@@ -9,9 +8,15 @@ const AUDIO_BITRATE: Record<AudioQuality, string> = {
   high: "256k",
 };
 
+const VORBIS_QUALITY: Record<AudioQuality, string> = {
+  low: "3",
+  standard: "5",
+  high: "7",
+};
+
 const VIDEO_SCALE: Record<VideoQuality, string> = {
-  p720: "scale=1280:-2",
-  p1080: "scale=1920:-2",
+  p720: "scale=w='min(1280,iw)':h='min(720,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",
+  p1080: "scale=w='min(1920,iw)':h='min(1080,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",
 };
 
 const MIME_BY_FORMAT: Record<string, string> = {
@@ -36,7 +41,7 @@ export function buildFfmpegArgs(inputPath: string, outputPath: string, format: O
   if (isAudio(format)) {
     if (format === "mp3") return ["-y", "-i", inputPath, "-map_metadata", "0", "-map_chapters", "0", "-vn", "-c:a", "libmp3lame", "-b:a", AUDIO_BITRATE[aq], outputPath];
     if (format === "aac") return ["-y", "-i", inputPath, "-map_metadata", "0", "-map_chapters", "0", "-vn", "-c:a", "aac", "-b:a", AUDIO_BITRATE[aq], outputPath];
-    if (format === "ogg") return ["-y", "-i", inputPath, "-map_metadata", "0", "-map_chapters", "0", "-vn", "-c:a", "libvorbis", "-b:a", AUDIO_BITRATE[aq], outputPath];
+    if (format === "ogg") return ["-y", "-i", inputPath, "-map_metadata", "0", "-map_chapters", "0", "-vn", "-c:a", "libvorbis", "-q:a", VORBIS_QUALITY[aq], outputPath];
     return ["-y", "-i", inputPath, "-map_metadata", "0", "-map_chapters", "0", "-vn", "-c:a", "pcm_s16le", outputPath];
   }
 
@@ -79,23 +84,13 @@ export async function convertMedia(params: {
   videoQuality: VideoQuality;
   outputBaseName: string;
   timeoutMs: number;
+  signal?: AbortSignal;
 }) {
   const outputFilename = `${params.outputBaseName}.${params.format}`;
   const outputPath = path.join(params.outputDir, outputFilename);
 
-  // Fast path: if source extension already matches requested output format, skip re-encoding.
-  const inputExt = path.extname(params.inputPath).replace(".", "").toLowerCase();
-  if (inputExt === params.format) {
-    await fs.copyFile(params.inputPath, outputPath);
-    return {
-      outputPath,
-      outputFilename,
-      mimeType: MIME_BY_FORMAT[params.format] ?? "application/octet-stream",
-    };
-  }
-
   const args = buildFfmpegArgs(params.inputPath, outputPath, params.format, params.audioQuality, params.videoQuality);
-  await runCommand("ffmpeg", args, { timeoutMs: params.timeoutMs });
+  await runCommand("ffmpeg", args, { timeoutMs: params.timeoutMs, signal: params.signal });
 
   return {
     outputPath,

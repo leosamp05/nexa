@@ -7,5 +7,6 @@ coverage
 npm-debug.log*
 *.tsbuildinfo
 .DS_Store
+output/playwright/
 storage/*
 !storage/.gitkeep

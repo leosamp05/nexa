@@ -3,19 +3,20 @@ import { getCurrentUser } from "@/lib/auth";
 import { jsonError } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
 import { serializeJob } from "@/lib/serialize";
-import { jobDirPath, removeDirectoryIfEmpty, removeFileIfExists, resolveInsideDataDir } from "@/lib/storage";
+import { removeJobDirectory } from "@/lib/storage";
 
-type Context = { params: { id: string } };
+type Context = { params: Promise<{ id: string }> };
 
 export const runtime = "nodejs";
 
 export async function GET(_request: NextRequest, context: Context) {
   const user = await getCurrentUser();
   if (!user) return jsonError(401, "Unauthorized");
+  const { id } = await context.params;
 
   const job = await prisma.job.findFirst({
     where: {
-      id: context.params.id,
+      id,
       userId: user.id,
     },
     include: { files: true },
@@ -28,10 +29,11 @@ export async function GET(_request: NextRequest, context: Context) {
 export async function DELETE(_request: NextRequest, context: Context) {
   const user = await getCurrentUser();
   if (!user) return jsonError(401, "Unauthorized");
+  const { id } = await context.params;
 
   const job = await prisma.job.findFirst({
     where: {
-      id: context.params.id,
+      id,
       userId: user.id,
     },
     include: { files: true },
@@ -39,10 +41,11 @@ export async function DELETE(_request: NextRequest, context: Context) {
 
   if (!job) return jsonError(404, "Job not found");
 
-  for (const file of job.files) {
-    await removeFileIfExists(resolveInsideDataDir(file.path));
+  if (job.status === "queued" || job.status === "processing") {
+    return jsonError(409, "Cancel the active job before deleting it");
   }
-  await removeDirectoryIfEmpty(jobDirPath(job.id));
+
+  await removeJobDirectory(job.id);
 
   await prisma.$transaction([
     prisma.auditEvent.create({

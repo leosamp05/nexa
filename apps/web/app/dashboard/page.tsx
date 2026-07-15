@@ -7,12 +7,13 @@ import { getCurrentUser, isAuthRequired } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { serializeJob } from "@/lib/serialize";
 
-function getClientIp() {
-  const requestHeaders = headers();
+async function getClientIp() {
+  const requestHeaders = await headers();
   const rawIp = extractClientIpFromHeaderValues({
     forwarded: requestHeaders.get("x-forwarded-for"),
     cfConnectingIp: requestHeaders.get("cf-connecting-ip"),
     realIp: requestHeaders.get("x-real-ip"),
+    proxyToken: requestHeaders.get("x-nexa-proxy-token"),
   });
   return formatClientIpForUi(rawIp);
 }
@@ -20,7 +21,7 @@ function getClientIp() {
 export default async function DashboardPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
-  const clientIp = getClientIp();
+  const clientIp = await getClientIp();
   const authRequired = isAuthRequired();
 
   const jobs = await prisma.job.findMany({
@@ -37,6 +38,7 @@ export default async function DashboardPage() {
       initialJobs={jobs.map(serializeJob)}
       captchaEnabled={appConfig.captchaEnabled}
       captchaSiteKey={appConfig.captchaSiteKey}
+      maxUploadBytes={appConfig.maxUploadBytes}
     />
   );
 }

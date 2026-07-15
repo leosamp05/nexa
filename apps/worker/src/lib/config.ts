@@ -15,6 +15,7 @@ export const config = {
   redisUrl: process.env.REDIS_URL ?? "",
   dataDir: path.resolve(process.env.DATA_DIR ?? path.join(process.cwd(), "..", "..", "storage")),
   maxDurationSeconds: n(process.env.MAX_DURATION_SECONDS, 3600),
+  maxRemoteDownloadBytes: n(process.env.MAX_REMOTE_DOWNLOAD_BYTES ?? process.env.MAX_UPLOAD_BYTES, 500 * 1024 * 1024),
   jobTimeoutMs: n(process.env.JOB_TIMEOUT_MS, 900000),
   queueAttempts: n(process.env.QUEUE_ATTEMPTS, 3),
   queueRetryDelayMs: n(process.env.QUEUE_RETRY_DELAY_MS, 5000),

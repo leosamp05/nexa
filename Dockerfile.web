@@ -4,7 +4,7 @@ WORKDIR /app
 COPY package*.json ./
 COPY apps/web/package*.json ./apps/web/
 COPY apps/worker/package*.json ./apps/worker/
-RUN npm install
+RUN npm ci --legacy-peer-deps
 
 COPY . .
 RUN npm run prisma:generate

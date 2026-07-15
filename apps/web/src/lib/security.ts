@@ -92,12 +92,18 @@ function looksLikeText(buffer: Buffer) {
   return printable / sample.length > 0.85;
 }
 
-export function detectMimeFromBuffer(buffer: Buffer, filename: string) {
+export function detectMimeFromBuffer(buffer: Buffer, filename: string, reportedMime?: string) {
   if (buffer.length < 4) return null;
   const lowerName = filename.toLowerCase();
+  const reported = reportedMime?.toLowerCase() ?? "";
 
   if (buffer.subarray(0, 5).toString("ascii") === "%PDF-") return "application/pdf";
-  if (buffer.subarray(0, 4).toString("ascii") === "OggS") return "audio/ogg";
+  if (buffer.subarray(0, 5).toString("ascii") === "{\\rtf") return "application/rtf";
+  if (buffer.subarray(0, 4).toString("ascii") === "fLaC") return "audio/flac";
+  if (buffer.subarray(0, 4).toString("ascii") === "OggS") {
+    if (lowerName.endsWith(".ogv") || reported === "video/ogg") return "video/ogg";
+    return "audio/ogg";
+  }
   if (buffer.subarray(0, 3).toString("ascii") === "ID3") return "audio/mpeg";
   if (buffer[0] === 0xff && (buffer[1] & 0xe0) === 0xe0) return "audio/mpeg";
 
@@ -109,11 +115,18 @@ export function detectMimeFromBuffer(buffer: Buffer, filename: string) {
     return "audio/wav";
   }
 
+  if (buffer.length >= 12 && buffer.subarray(0, 4).toString("ascii") === "RIFF" && buffer.subarray(8, 12).toString("ascii") === "AVI ") {
+    return "video/x-msvideo";
+  }
+
   if (buffer.length > 12 && buffer.subarray(4, 8).toString("ascii") === "ftyp") {
+    if (lowerName.endsWith(".m4a") || lowerName.endsWith(".m4b") || reported === "audio/mp4") return "audio/mp4";
+    if (lowerName.endsWith(".mov") || reported === "video/quicktime" || buffer.subarray(8, 12).toString("ascii") === "qt  ") return "video/quicktime";
     return "video/mp4";
   }
 
   if (buffer[0] === 0x1a && buffer[1] === 0x45 && buffer[2] === 0xdf && buffer[3] === 0xa3) {
+    if (lowerName.endsWith(".weba") || reported === "audio/webm") return "audio/webm";
     if (lowerName.endsWith(".webm")) return "video/webm";
     return "video/x-matroska";
   }
@@ -170,6 +183,7 @@ export function getClientIp(request: NextRequest): string {
     forwarded: request.headers.get("x-forwarded-for"),
     cfConnectingIp: request.headers.get("cf-connecting-ip"),
     realIp: request.headers.get("x-real-ip"),
+    proxyToken: request.headers.get("x-nexa-proxy-token"),
   });
 }
 
@@ -271,5 +285,20 @@ export async function scanUploadBuffer(buffer: Buffer, filename: string) {
   } finally {
     await fs.rm(tempFile, { force: true }).catch(() => undefined);
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+export async function scanUploadFile(filePath: string) {
+  if (!appConfig.antivirusEnabled) return { ok: true as const };
+
+  try {
+    const result = await runClamScan(filePath);
+    if (result === "infected") {
+      return { ok: false as const, reason: "Malware detected in uploaded file." };
+    }
+    return { ok: true as const };
+  } catch (error) {
+    logger.error({ error }, "Antivirus scan failed");
+    return { ok: false as const, reason: "Antivirus scan failed." };
   }
 }

@@ -17,7 +17,10 @@ type SessionPayload = {
 
 function parseBool(value: string | undefined, fallback: boolean) {
   if (value === undefined) return fallback;
-  return ["1", "true", "yes", "on"].includes(value.toLowerCase());
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  throw new Error("AUTH_REQUIRED must be one of: true, false, 1, 0, yes, no, on, off");
 }
 
 export function isAuthRequired() {
@@ -25,11 +28,12 @@ export function isAuthRequired() {
 }
 
 async function getOrCreateBypassUser() {
-  const requestHeaders = headers();
+  const requestHeaders = await headers();
   const ip = extractClientIpFromHeaderValues({
     forwarded: requestHeaders.get("x-forwarded-for"),
     cfConnectingIp: requestHeaders.get("cf-connecting-ip"),
     realIp: requestHeaders.get("x-real-ip"),
+    proxyToken: requestHeaders.get("x-nexa-proxy-token"),
   });
   const ipHash = createHash("sha256").update(ip).digest("hex").slice(0, 24);
   const email = `ip-${ipHash}@nexa.local`;
@@ -52,7 +56,9 @@ async function getOrCreateBypassUser() {
 
 function getSecret() {
   const secret = process.env.SESSION_SECRET;
-  if (!secret) throw new Error("SESSION_SECRET missing");
+  if (!secret || secret.length < 32 || secret === "replace-with-a-long-random-secret") {
+    throw new Error("SESSION_SECRET must be a random value of at least 32 characters");
+  }
   return new TextEncoder().encode(secret);
 }
 
@@ -106,7 +112,7 @@ export function clearSessionCookie(response: NextResponse) {
 
 export async function getCurrentSession() {
   // Mark auth consumers as dynamic in Next.js.
-  const jar = cookies();
+  const jar = await cookies();
 
   if (!isAuthRequired()) {
     const user = await getOrCreateBypassUser();
